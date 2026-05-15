@@ -632,6 +632,8 @@ const earthMat = earth.material as THREE.MeshStandardMaterial;
 
 let cloudsOn = true;
 let nightOn  = true;
+let liveOn   = false;
+let liveDateLabel = '';  // YYYY-MM-DD currently displayed when live is on
 
 const hud = document.getElementById('info-text')!;
 
@@ -639,7 +641,8 @@ function refreshHud() {
   hud.innerHTML =
     `Orbit: left-drag &nbsp;|&nbsp; Zoom: scroll<br>` +
     `[C] clouds: <b>${cloudsOn ? 'on' : 'off'}</b><br>` +
-    `[N] night lights: <b>${nightOn ? 'on' : 'off'}</b>`;
+    `[N] night lights: <b>${nightOn ? 'on' : 'off'}</b><br>` +
+    `[L] live satellite: <b>${liveOn ? `on (${liveDateLabel})` : 'off'}</b>`;
 }
 refreshHud();
 
@@ -659,6 +662,78 @@ function applyContrast() {
 contrastEl.addEventListener('input', applyContrast);
 applyContrast();
 
+// ─── Live satellite imagery (NASA GIBS) ──────────────────────────────────────
+// Swap the Earth's day map with MODIS Terra true-color from a recent UTC date.
+// Satellite imagery already has clouds baked in, so we also hide the curated
+// cloud overlay while live is on. Reverts cleanly when toggled off.
+
+function isoUtcDate(daysAgo: number): string {
+  const d = new Date(Date.now() - daysAgo * 86_400_000);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+}
+
+function gibsTrueColorUrl(dateIso: string): string {
+  // WMS 1.3.0, EPSG:4326, BBOX order is (minLat, minLon, maxLat, maxLon).
+  const params = new URLSearchParams({
+    SERVICE: 'WMS',
+    REQUEST: 'GetMap',
+    VERSION: '1.3.0',
+    // VIIRS SNPP has a wider swath than MODIS Terra → fewer seams in the mosaic.
+    LAYERS:  'VIIRS_SNPP_CorrectedReflectance_TrueColor',
+    CRS:     'EPSG:4326',
+    BBOX:    '-90,-180,90,180',
+    WIDTH:   '2048',
+    HEIGHT:  '1024',
+    FORMAT:  'image/jpeg',
+    TIME:    dateIso,
+  });
+  return `https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi?${params.toString()}`;
+}
+
+let liveTexture: THREE.Texture | null = null;
+let cloudsBeforeLive = true;  // remember user's C state to restore on toggle off
+
+function setLive(on: boolean) {
+  if (on === liveOn) return;
+  if (on) {
+    // Two days back: gives the processing pipeline enough time to fill in
+    // late-arriving swaths, so the global mosaic is essentially complete.
+    const date = isoUtcDate(2);
+    loader.load(
+      gibsTrueColorUrl(date),
+      (tex) => {
+        tex.colorSpace = THREE.SRGBColorSpace;
+        tex.anisotropy = maxAniso;
+        liveTexture?.dispose();
+        liveTexture = tex;
+        earthMat.map = tex;
+        earthMat.needsUpdate = true;
+        cloudsBeforeLive = cloudsOn;
+        cloudsOn = false;
+        clouds.visible = false;
+        liveOn = true;
+        liveDateLabel = date;
+        refreshHud();
+      },
+      undefined,
+      () => {
+        liveOn = false;
+        showStatus('Failed to load live satellite imagery (network/CORS).', true);
+        refreshHud();
+      }
+    );
+  } else {
+    earthMat.map = dayMap;
+    earthMat.needsUpdate = true;
+    cloudsOn = cloudsBeforeLive;
+    clouds.visible = cloudsOn;
+    liveOn = false;
+    liveDateLabel = '';
+    refreshHud();
+  }
+}
+
 window.addEventListener('keydown', (e) => {
   // Ignore if a text field is focused (none here yet, but cheap to be safe)
   if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
@@ -671,6 +746,8 @@ window.addEventListener('keydown', (e) => {
     nightOn = !nightOn;
     earthMat.emissiveIntensity = nightOn ? NIGHT_INTENSITY : 0;
     refreshHud();
+  } else if (k === 'l') {
+    setLive(!liveOn);
   }
 });
 

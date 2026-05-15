@@ -63,3 +63,22 @@ Single-file scene, organized top-to-bottom roughly in lifecycle order:
 - **Don't reintroduce shadows or a `PlaneGeometry` floor** — those are remnants of the original cube/sphere/torus demo. The Earth scene has no floor and no shadow-casting.
 - **Texture caveat**: if a new Earth texture comes in as TIFF, convert it (`sips -s format png ... --out ...` on macOS). Browsers can't decode TIFF.
 - **Bundle warning** at ~580 KB is just luxon + the Three.js core; safe to ignore until the app grows further.
+
+## TODO
+
+### Stage 2 — real cloud forecasts for upcoming flights
+The current Live-satellite toggle (`L`) shows recent *observed* clouds; it does not answer "what clouds will my flight fly through". The real feature uses a numerical weather model:
+
+- Build-time / scheduled script fetches the latest **NOAA GFS** run from NOMADS (`nomads.ncep.noaa.gov`), or **ECMWF Open Data**, for the `Total Cloud Cover %` parameter at the forecast hour matching the flight's UTC midpoint.
+- Convert GRIB2 → equirectangular PNG (`wgrib2` + ImageMagick, or a pure-JS lib like `@thi.ng/grib`). Save as `public/textures/clouds-{YYYYMMDD-HH}.png`.
+- App picks the file matching the flight time, uses it as the cloud overlay's `alphaMap` (keeps the clean Solar System Scope base map underneath).
+- Stretch: blend two adjacent forecast frames as the plane animates → weather visibly evolves along the flight.
+- Fall back to Stage 1 (GIBS imagery) when the requested time is outside the forecast horizon (~10 days).
+
+### Live-satellite freshness improvements (Stage 1 follow-ups)
+Live mode currently uses GIBS `best/` endpoint, VIIRS SNPP, 2 days back UTC (chosen to avoid swath gaps). Options to push fresher / fill gaps:
+
+- **NRT endpoint**: swap `best/` → `nrt/` in the WMS URL for ~3-6 h latency (lower-quality calibration, occasionally noisier-looking).
+- **Multi-day composite**: fetch yesterday + 2 days back on a `<canvas>`, combine taking the freshest valid pixel per location.
+- **Terra + Aqua composite**: fetch both MODIS layers (different overpass times), max-compose to eliminate residual swath seams.
+- **Geostationary mosaic** (GOES + Himawari + Meteosat) for true near-real-time global imagery; requires per-source projection warping and is significantly more work.
