@@ -1,0 +1,21 @@
+{
+  "name": "3d-in-browser-test",
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "luxon": "^3.7.2",
+    "three": "^0.175.0"
+  },
+  "devDependencies": {
+    "@types/luxon": "^3.7.1",
+    "@types/three": "^0.175.0",
+    "typescript": "^5.7.2",
+    "tz-lookup": "^6.1.25",
+    "vite": "^6.3.2"
+  }
+}

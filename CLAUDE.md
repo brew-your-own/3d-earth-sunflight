@@ -1,0 +1,65 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this is
+
+An interactive 3D Earth visualizer in the browser. Draws great-circle flight routes between two IATA airports, animates a plane along the route, and at every point computes the sun's position relative to the plane (clock direction, elevation, day/twilight/night).
+
+## Commands
+
+```bash
+npm run dev      # Vite dev server at http://localhost:5173 (hot reload)
+npm run build    # type-check (tsc) then bundle to dist/
+npm run preview  # serve the dist/ build locally
+
+# One-off: rebuild public/airports.json from airports/airports.csv.
+# Adds an IANA `tz` field per airport via tz-lookup. Re-run only if the CSV changes.
+node scripts/build-airports.mjs
+```
+
+## Stack
+
+- **Vite 6** — bundler/dev server (no config file)
+- **Three.js 0.175** with `@types/three`
+- **luxon** — IANA timezone math for local↔UTC conversion at runtime
+- **tz-lookup** (dev only) — lat/lon → IANA tz at build time
+- All application code lives in `src/main.ts`; entry point is `index.html`
+
+## Layout of `src/main.ts`
+
+Single-file scene, organized top-to-bottom roughly in lifecycle order:
+
+1. **Renderer** — `WebGLRenderer` with ACES filmic tone mapping; exposure driven by the contrast slider
+2. **Scene + Camera + Controls** — `OrbitControls` with damping, no pan, clamped zoom
+3. **Lights** — single directional "sun" + dim ambient; both controlled by the contrast slider, and the sun is repositioned to the real subsolar point during flight playback
+4. **Textures** — `loadColor` (sRGB) vs `loadData` (linear) helpers
+5. **Starfield + Earth (tilted 23.4° on Z) + Clouds**
+6. **Lat/lon helpers + great-circle drawing** (`latLonToVec3`, `greatCirclePoints` via slerp with antipodal fallback)
+7. **Airports + routing** — fetched from `/airports.json`; `setRoute(from, to)` swaps the visible great circle
+8. **Subsolar point** — NOAA-derived (mean longitude + ecliptic correction + GMST); ~0.01° accuracy
+9. **Flight state + playback** — `setFlight(from, to, depLocal, arrLocal)`; cached slerp params, plane mesh, `progress ∈ [0, 1]`
+10. **Recap table** — offline 2000-sample scan that records DAY/TWILIGHT/NIGHT transitions and LEFT/RIGHT sun-side changes (during DAY); rendered bottom-right with timestamps in the departure airport's IANA TZ
+11. **Form wiring, HUD, contrast slider, keyboard toggles**
+12. **Animation loop** — flight playback when a flight is loaded, idle slow spin otherwise
+
+## Key conventions
+
+- **Lat/lon → 3D**: `latLonToVec3` puts `(lat 0, lon 0)` at `+X`, north pole at `+Y`, `lon +90°` at **`-Z`**. The negative Z is deliberate: Three's `SphereGeometry` UVs trace -X→+Z→+X→-Z→-X as `u` goes 0→1, so for an equirectangular texture (u: -180→+180) longitude increases clockwise around +Y.
+- **Earth-local frame for routes**: great-circle line, endpoint markers, and the plane mesh are all parented to the Earth mesh — they inherit the axial tilt and any rotation, staying glued to the surface.
+- **Sun positioning during a flight**: subsolar point is computed in Earth's *local* frame, then transformed to world via `earth.getWorldQuaternion(...)`. The directional light goes along that direction × 50.
+- **Color spaces matter**: textures used for color (`map`, `emissiveMap`, sky) need `colorSpace = SRGBColorSpace`; data textures (`normalMap`, `alphaMap`) stay linear (the loader helpers enforce this).
+- **`OrbitControls` requires `controls.update()` each frame** when `enableDamping = true`.
+- **Day/twilight/night thresholds**: solar elevation ≥ 0° = DAY, (-6°, 0°) = TWILIGHT (civil), < -6° = NIGHT.
+
+## Data files
+
+- `airports/airports.csv` — OurAirports public-domain dump (~13 MB), source of truth.
+- `public/airports.json` — slim per-IATA JSON built from the CSV (~9k entries, ~1.2 MB), `tz` filled at build time.
+- `public/textures/` — Solar System Scope Earth textures (2K) + Milky Way starfield. The normal map ships as PNG (converted from the original TIFF, which browsers cannot decode natively).
+
+## Things future me will trip on
+
+- **Don't reintroduce shadows or a `PlaneGeometry` floor** — those are remnants of the original cube/sphere/torus demo. The Earth scene has no floor and no shadow-casting.
+- **Texture caveat**: if a new Earth texture comes in as TIFF, convert it (`sips -s format png ... --out ...` on macOS). Browsers can't decode TIFF.
+- **Bundle warning** at ~580 KB is just luxon + the Three.js core; safe to ignore until the app grows further.
