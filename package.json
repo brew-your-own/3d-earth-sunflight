@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "package": "tsc && vite build --mode singlefile",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -16,6 +17,7 @@
     "@types/three": "^0.175.0",
     "typescript": "^5.7.2",
     "tz-lookup": "^6.1.25",
-    "vite": "^6.3.2"
+    "vite": "^6.3.2",
+    "vite-plugin-singlefile": "^2.3.3"
   }
 }

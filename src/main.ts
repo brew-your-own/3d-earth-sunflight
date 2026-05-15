@@ -2,6 +2,16 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { DateTime } from 'luxon';
 
+// Assets are imported (not fetched) so the bundler can decide per build
+// whether to ship them as separate hashed files (normal build) or inline as
+// base64 data URLs (singlefile build).
+import dayMapUrl    from './textures/2k_earth_daymap.jpg';
+import nightMapUrl  from './textures/2k_earth_nightmap.jpg';
+import normalMapUrl from './textures/2k_earth_normal_map.png';
+import cloudsMapUrl from './textures/2k_earth_clouds.jpg';
+import starsMapUrl  from './textures/2k_stars_milky_way.jpg';
+import airportsData from './airports.json';
+
 // ─── Renderer ────────────────────────────────────────────────────────────────
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -62,11 +72,11 @@ function loadData(path: string) {
   return t;
 }
 
-const dayMap     = loadColor('/textures/2k_earth_daymap.jpg');
-const nightMap   = loadColor('/textures/2k_earth_nightmap.jpg');
-const normalMap  = loadData('/textures/2k_earth_normal_map.png');
-const cloudsMap  = loadData('/textures/2k_earth_clouds.jpg');   // used as alpha
-const starsMap   = loadColor('/textures/2k_stars_milky_way.jpg');
+const dayMap     = loadColor(dayMapUrl);
+const nightMap   = loadColor(nightMapUrl);
+const normalMap  = loadData(normalMapUrl);
+const cloudsMap  = loadData(cloudsMapUrl);   // used as alpha
+const starsMap   = loadColor(starsMapUrl);
 
 // ─── Starfield (large inverted sphere) ───────────────────────────────────────
 
@@ -606,24 +616,21 @@ function toLocalIso(d: Date): string {
          `T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-fetch('/airports.json')
-  .then((r) => r.json())
-  .then((data) => {
-    airports = data;
-    inFrom.value = 'JFK';
-    inTo.value   = 'HND';
-    // Pre-fill plausible JFK→HND times: 11:30 today (JFK local) → 14:30 next day
-    // (HND local). Times will be interpreted in each airport's IANA timezone
-    // when "Play" is clicked.
-    const dep = new Date(); dep.setHours(11, 30, 0, 0);
-    const arr = new Date(dep);
-    arr.setDate(arr.getDate() + 1);
-    arr.setHours(14, 30, 0, 0);
-    inDep.value = toLocalIso(dep);
-    inArr.value = toLocalIso(arr);
-    submitRoute();
-  })
-  .catch((err) => showStatus(`Failed to load airports: ${err}`, true));
+airports = airportsData as Record<string, Airport>;
+inFrom.value = 'JFK';
+inTo.value   = 'HND';
+// Pre-fill plausible JFK→HND times: 11:30 today (JFK local) → 14:30 next day
+// (HND local). Times will be interpreted in each airport's IANA timezone
+// when "Play" is clicked.
+{
+  const dep = new Date(); dep.setHours(11, 30, 0, 0);
+  const arr = new Date(dep);
+  arr.setDate(arr.getDate() + 1);
+  arr.setHours(14, 30, 0, 0);
+  inDep.value = toLocalIso(dep);
+  inArr.value = toLocalIso(arr);
+}
+submitRoute();
 
 // ─── View toggles (keyboard) ─────────────────────────────────────────────────
 

@@ -5,7 +5,7 @@ import path from 'node:path';
 import tzlookup from 'tz-lookup';
 
 const INPUT  = 'airports/airports.csv';
-const OUTPUT = 'public/airports.json';
+const OUTPUT = 'src/airports.json';
 
 function parseCsvLine(line) {
   const fields = [];

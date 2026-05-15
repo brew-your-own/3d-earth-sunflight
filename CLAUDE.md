@@ -10,10 +10,11 @@ An interactive 3D Earth visualizer in the browser. Draws great-circle flight rou
 
 ```bash
 npm run dev      # Vite dev server at http://localhost:5173 (hot reload)
-npm run build    # type-check (tsc) then bundle to dist/
+npm run build    # type-check + chunked production build → dist/ (separate hashed assets, suitable for web hosting)
+npm run package  # type-check + single-file build → dist/index.html (one ~5 MB self-contained file, double-clickable)
 npm run preview  # serve the dist/ build locally
 
-# One-off: rebuild public/airports.json from airports/airports.csv.
+# One-off: rebuild src/airports.json from airports/airports.csv.
 # Adds an IANA `tz` field per airport via tz-lookup. Re-run only if the CSV changes.
 node scripts/build-airports.mjs
 ```
@@ -55,14 +56,17 @@ Single-file scene, organized top-to-bottom roughly in lifecycle order:
 ## Data files
 
 - `airports/airports.csv` — OurAirports public-domain dump (~13 MB), source of truth.
-- `public/airports.json` — slim per-IATA JSON built from the CSV (~9k entries, ~1.2 MB), `tz` filled at build time.
-- `public/textures/` — Solar System Scope Earth textures (2K) + Milky Way starfield. The normal map ships as PNG (converted from the original TIFF, which browsers cannot decode natively).
+- `src/airports.json` — slim per-IATA JSON built from the CSV (~9k entries, ~1.2 MB), `tz` filled at build time. **Imported** into `main.ts` (not fetched at runtime) so the bundler can inline it for the singlefile build.
+- `src/textures/` — Solar System Scope Earth textures (2K) + Milky Way starfield. Also imported (not in `public/`) so Vite can hash-and-emit (normal build) or base64-inline (singlefile build).
+
+No `public/` folder is used: keeping assets out of `public/` is what enables the singlefile packaging to work.
 
 ## Things future me will trip on
 
 - **Don't reintroduce shadows or a `PlaneGeometry` floor** — those are remnants of the original cube/sphere/torus demo. The Earth scene has no floor and no shadow-casting.
 - **Texture caveat**: if a new Earth texture comes in as TIFF, convert it (`sips -s format png ... --out ...` on macOS). Browsers can't decode TIFF.
-- **Bundle warning** at ~580 KB is just luxon + the Three.js core; safe to ignore until the app grows further.
+- **Bundle warning** in the normal build (~1.7 MB) is dominated by `airports.json` being imported into the JS rather than fetched separately. Acceptable; can be split later if it matters.
+- **Singlefile output is ~5 MB** of HTML (textures and JSON inlined as base64). Friend can double-click `dist/index.html`; no server, no network needed (except for Live satellite, `L`).
 
 ## TODO
 
