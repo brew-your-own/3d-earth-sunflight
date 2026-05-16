@@ -934,7 +934,22 @@ function refreshHud() {
     `Orbit: left-drag &nbsp;|&nbsp; Zoom: scroll<br>` +
     `[C] clouds: <b>${cloudsOn ? 'on' : 'off'}</b><br>` +
     `[N] night lights: <b>${nightOn ? 'on' : 'off'}</b><br>` +
-    `[L] live satellite: <b>${liveOn ? `on (${liveDateLabel})` : 'off'}</b>`;
+    `[L] live satellite: <b>${liveOn ? `on (${liveDateLabel})` : 'off'}</b><br>` +
+    `[G] center on Greenwich (0°,&nbsp;0°)`;
+}
+
+// Reset orbit so the camera faces Earth's (lat 0, lon 0) with its north pole
+// straight up. Honors current Earth rotation (idle spin + axial tilt) by
+// transforming Earth-local axes into world space. Preserves zoom distance.
+function goToGreenwich() {
+  const q  = earth.getWorldQuaternion(new THREE.Quaternion());
+  const wx = new THREE.Vector3(1, 0, 0).applyQuaternion(q);   // (lat 0, lon 0)
+  const wy = new THREE.Vector3(0, 1, 0).applyQuaternion(q);   // north pole
+  const dist = camera.position.distanceTo(controls.target);
+  controls.target.set(0, 0, 0);
+  camera.up.copy(wy);
+  camera.position.copy(wx).multiplyScalar(dist);
+  controls.update();
 }
 refreshHud();
 
@@ -1040,6 +1055,8 @@ window.addEventListener('keydown', (e) => {
     refreshHud();
   } else if (k === 'l') {
     setLive(!liveOn);
+  } else if (k === 'g') {
+    goToGreenwich();
   }
 });
 
