@@ -539,6 +539,10 @@ const recapEl     = document.getElementById('recap') as HTMLDivElement;
 const recapTitle  = recapEl.querySelector('.title')   as HTMLDivElement;
 const recapTable  = recapEl.querySelector('table')    as HTMLTableElement;
 
+let recapRowTimes: number[] = [];                // utcMs per row, ascending
+let recapTrEls:    HTMLTableRowElement[] = [];
+let currentRowIdx = -1;
+
 function renderRecap(f: Flight) {
   const rows = computeRecap(f);
   recapTitle.textContent = `Phase transitions — times in ${f.from.tz}`;
@@ -548,12 +552,34 @@ function renderRecap(f: Flight) {
     return `<tr class="${cls}"><td class="time">${t}</td><td class="label">${r.label}</td></tr>`;
   }).join('');
   recapEl.classList.add('visible');
+  recapRowTimes = rows.map((r) => r.utcMs);
+  recapTrEls    = Array.from(recapTable.querySelectorAll('tr')) as HTMLTableRowElement[];
+  currentRowIdx = -1;
+}
+
+// Highlight the last row whose timestamp is ≤ utcMs (the segment we're inside).
+function updateRecapHighlight(utcMs: number) {
+  if (recapTrEls.length === 0) return;
+  let idx = -1;
+  for (let i = 0; i < recapRowTimes.length; i++) {
+    if (recapRowTimes[i] <= utcMs) idx = i; else break;
+  }
+  if (idx === currentRowIdx) return;
+  if (currentRowIdx >= 0) recapTrEls[currentRowIdx].classList.remove('current');
+  if (idx >= 0) {
+    recapTrEls[idx].classList.add('current');
+    recapTrEls[idx].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+  currentRowIdx = idx;
 }
 
 function hideRecap() {
   recapEl.classList.remove('visible');
   recapTable.innerHTML = '';
   recapTitle.textContent = '';
+  recapRowTimes = [];
+  recapTrEls = [];
+  currentRowIdx = -1;
 }
 
 function updateFlightFrame(t: number) {
@@ -582,6 +608,8 @@ function updateFlightFrame(t: number) {
   const planeLat = THREE.MathUtils.radToDeg(Math.asin(pos.y));
   const planeLon = THREE.MathUtils.radToDeg(Math.atan2(-pos.z, pos.x));
   const elevDeg  = THREE.MathUtils.radToDeg(Math.asin(sU));
+
+  updateRecapHighlight(utcMs);
 
   const utcStr = new Date(utcMs).toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
   const traveledKm  = t * flight.distanceKm;
