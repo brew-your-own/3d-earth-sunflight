@@ -7,6 +7,8 @@ elevation, day / twilight / night).
 
 ![screenshot](docs/screenshot.png)
 
+**Live demo:** <https://brew-your-own.github.io/3d-earth-sunflight/>
+
 ## Why I built this
 
 [sunflight.org](https://sunflight.org) — the site I used to consult before a
