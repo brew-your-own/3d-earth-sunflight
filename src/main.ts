@@ -1135,7 +1135,7 @@ const hud = document.getElementById('info-text')!;
 
 function refreshHud() {
   hud.innerHTML =
-    `Orbit: left-drag &nbsp;|&nbsp; Zoom: scroll<br>` +
+    `Orbit: left-drag &nbsp;|&nbsp; Zoom: scroll &nbsp;|&nbsp; Rev: ${__GIT_REV__}<br>` +
     `[C] clouds: <b>${cloudsOn ? 'on' : 'off'}</b><br>` +
     `[N] night lights: <b>${nightOn ? 'on' : 'off'}</b><br>` +
     `[L] live satellite: <b>${liveOn ? `on (${liveDateLabel})` : 'off'}</b><br>` +

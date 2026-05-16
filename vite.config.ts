@@ -1,5 +1,11 @@
 import { defineConfig } from 'vite';
 import { viteSingleFile } from 'vite-plugin-singlefile';
+import { execSync } from 'node:child_process';
+
+function gitRev(): string {
+  try { return execSync('git rev-parse --short HEAD').toString().trim(); }
+  catch { return 'unknown'; }
+}
 
 // Two build modes:
 //   `npm run build`   → normal chunked output in dist/ (separate hashed assets)
@@ -10,6 +16,9 @@ export default defineConfig(({ mode }) => {
   const single = mode === 'singlefile';
   return {
     plugins: single ? [viteSingleFile()] : [],
+    define: {
+      __GIT_REV__: JSON.stringify(gitRev()),
+    },
     build: single
       ? {
           // Inline every asset, no matter how large.
