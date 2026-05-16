@@ -11,9 +11,8 @@ elevation, day / twilight / night).
 
 ## Why I built this
 
-[sunflight.org](https://sunflight.org) — the site I used to consult before a
-long flight to pick the right side of the plane — went dark recently, and
-I wanted to see if I could rebuild something similar quickly with the latest
+[sunflight.org](https://sunflight.org) — the site went dark recently, and
+I wanted to see if I could build something similar quickly with the latest
 Claude Code. This was really a personal project to play with the technology
 outside my normal wheelhouse (I'm normally more of a backend guy). It turns
 out it only took a couple of hours to get this done, which is incredible.
