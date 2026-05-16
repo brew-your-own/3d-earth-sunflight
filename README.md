@@ -7,6 +7,19 @@ elevation, day / twilight / night).
 
 ![screenshot](docs/screenshot.png)
 
+## Why I built this
+
+[sunflight.org](https://sunflight.org) — the site I used to consult before a
+long flight to pick the right side of the plane — went dark recently, and
+I wanted to see if I could rebuild something similar quickly with the latest
+Claude Code. This was really a personal project to play with the technology
+outside my normal wheelhouse (I'm normally more of a backend guy). It turns
+out it only took a couple of hours to get this done, which is incredible.
+
+This is not meant to be 100% reliable: the results look credible but I haven't
+verified them extensively. It matches closely what [flightside.app](https://flightside.app)
+does on the few tests I ran. I built it to scratch an itch — it is only a fun toy.
+
 ## Features
 
 - Textured Earth (day map, night lights, normal map, clouds) on a tilted axis,
@@ -43,8 +56,3 @@ the optional live-satellite overlay).
 
 - [CREDITS.md](CREDITS.md) — data sources, textures, inspiration
 - [LICENSE](LICENSE) — Apache-2.0 (code) + CC BY 4.0 (bundled Earth textures)
-
----
-
-> **Where to save the screenshot:** put a PNG at `docs/screenshot.png`
-> (create the `docs/` folder). The README already references that path.

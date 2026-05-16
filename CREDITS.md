@@ -3,7 +3,8 @@
 ## Inspiration
 
 - [sunflight.org](https://sunflight.org) — picking the right side of the plane
-  to sit on for sunrise / sunset views.
+  to sit on for sunrise / sunset views. The site went dark recently, which is
+  what triggered this project.
 - [flightside.app](https://flightside.app) — same idea, beautifully presented.
 
 ## Data sources
