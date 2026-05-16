@@ -593,6 +593,9 @@ const inDep    = document.getElementById('dep-time')   as HTMLInputElement;
 const inArr    = document.getElementById('arr-time')   as HTMLInputElement;
 const depTzEl  = document.getElementById('dep-tz')     as HTMLSpanElement;
 const arrTzEl  = document.getElementById('arr-tz')     as HTMLSpanElement;
+const inDur    = document.getElementById('arr-duration') as HTMLInputElement;
+const modeDtBtn  = document.getElementById('end-mode-dt')  as HTMLButtonElement;
+const modeDurBtn = document.getElementById('end-mode-dur') as HTMLButtonElement;
 const playBtn  = document.getElementById('play-btn')   as HTMLButtonElement;
 const scrubEl  = document.getElementById('scrub')      as HTMLInputElement;
 const statusEl = document.getElementById('route-status') as HTMLDivElement;
@@ -632,6 +635,84 @@ function refreshTzInfo() {
   arrTzEl.textContent = lastRouteTo   ? formatTzInfo(lastRouteTo.tz,   inArr.value) : '';
 }
 
+// ─── End-time mode (Datetime ↔ Duration) ────────────────────────────────────
+
+let endMode: 'datetime' | 'duration' = 'datetime';
+
+// Accepts "11h 30m", "11:30", "11.5", "11h", "30m". Returns minutes or null.
+function parseDuration(raw: string): number | null {
+  const s = raw.trim().toLowerCase();
+  if (!s) return null;
+  let m;
+  if ((m = s.match(/^(\d+):(\d{1,2})$/)))
+    return Number(m[1]) * 60 + Number(m[2]);
+  if ((m = s.match(/^(?:(\d+(?:\.\d+)?)\s*h)?\s*(?:(\d+)\s*m(?:in)?)?$/)) && (m[1] || m[2]))
+    return Math.round((m[1] ? parseFloat(m[1]) : 0) * 60 + (m[2] ? parseInt(m[2]) : 0));
+  if ((m = s.match(/^(\d+(?:\.\d+)?)$/)))
+    return Math.round(parseFloat(m[1]) * 60);
+  return null;
+}
+
+function formatDuration(min: number): string {
+  if (!Number.isFinite(min) || min < 0) return '';
+  return `${Math.floor(min / 60)}h ${min % 60}m`;
+}
+
+// arr_local (in toTz) = dep_local (in fromTz) + duration
+function durationToArrIso(depIso: string, fromTz: string, durMin: number, toTz: string): string {
+  const dep = DateTime.fromISO(depIso, { zone: fromTz });
+  if (!dep.isValid) return '';
+  return dep.plus({ minutes: durMin }).setZone(toTz).toFormat("yyyy-LL-dd'T'HH:mm");
+}
+
+function arrIsoToDurationMin(depIso: string, fromTz: string, arrIso: string, toTz: string): number | null {
+  const dep = DateTime.fromISO(depIso, { zone: fromTz });
+  const arr = DateTime.fromISO(arrIso, { zone: toTz });
+  if (!dep.isValid || !arr.isValid) return null;
+  return Math.round(arr.diff(dep, 'minutes').minutes);
+}
+
+// In Duration mode, the arrival datetime input is computed from
+// dep + duration. Keeps inArr.value in sync so Play / setFlight see correct ISO.
+function syncArrFromDuration() {
+  if (!lastRouteFrom || !lastRouteTo) return;
+  const dur = parseDuration(inDur.value);
+  if (dur === null) return;
+  const iso = durationToArrIso(inDep.value, lastRouteFrom.tz, dur, lastRouteTo.tz);
+  if (iso) inArr.value = iso;
+}
+
+// In Datetime mode, keep the (hidden) duration field synced to arr - dep so
+// toggling to Duration shows the right value.
+function syncDurationFromArr() {
+  if (!lastRouteFrom || !lastRouteTo) { inDur.value = ''; return; }
+  const mins = arrIsoToDurationMin(inDep.value, lastRouteFrom.tz, inArr.value, lastRouteTo.tz);
+  inDur.value = mins !== null && mins >= 0 ? formatDuration(mins) : '';
+}
+
+function setEndMode(mode: 'datetime' | 'duration') {
+  if (mode === endMode) return;
+  if (mode === 'duration') syncDurationFromArr();
+  else                     syncArrFromDuration();
+  endMode = mode;
+  modeDtBtn.classList.toggle('active',  mode === 'datetime');
+  modeDurBtn.classList.toggle('active', mode === 'duration');
+  inArr.style.display = mode === 'datetime' ? '' : 'none';
+  inDur.style.display = mode === 'duration' ? '' : 'none';
+  refreshTzInfo();
+}
+
+modeDtBtn.addEventListener('click',  () => setEndMode('datetime'));
+modeDurBtn.addEventListener('click', () => setEndMode('duration'));
+
+inDep.addEventListener('input', () => {
+  if (endMode === 'duration') syncArrFromDuration();
+  else                        syncDurationFromArr();
+  refreshTzInfo();
+});
+inDur.addEventListener('input', () => { syncArrFromDuration(); refreshTzInfo(); });
+inArr.addEventListener('input', () => { syncDurationFromArr(); refreshTzInfo(); });
+
 function submitRoute() {
   const from = commitAirportInput(inFrom);
   const to   = commitAirportInput(inTo);
@@ -644,14 +725,15 @@ function submitRoute() {
     showStatus(`${from} ${r.from.city} → ${to} ${r.to.city}`);
     lastRouteFrom = r.from;
     lastRouteTo   = r.to;
+    // The hidden mode's field becomes meaningful now that we have TZs.
+    if (endMode === 'duration') syncArrFromDuration();
+    else                        syncDurationFromArr();
     refreshTzInfo();
   } else {
     showStatus(r.error, true);
   }
 }
 
-inDep.addEventListener('input', refreshTzInfo);
-inArr.addEventListener('input', refreshTzInfo);
 
 form.addEventListener('submit', (e) => {
   e.preventDefault();

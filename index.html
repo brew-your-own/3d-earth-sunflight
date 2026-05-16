@@ -37,9 +37,9 @@
         display: flex;
         flex-direction: column;
         gap: 6px;
-        min-width: 360px;
+        min-width: 420px;
       }
-      #route-form .row { display: flex; gap: 6px; align-items: center; }
+      #route-form .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
       #route-form .row label { display: flex; gap: 6px; align-items: center; }
       #route-form input[type="text"], #route-form .iata {
         width: 120px;
@@ -105,6 +105,19 @@
       #route-form button:hover { background: #3a3a3a; }
       #route-form button:disabled { opacity: 0.45; cursor: not-allowed; }
       .tz-info { color: #9ab; font-size: 11px; }
+      .seg-toggle { display: inline-flex; border: 1px solid #555; border-radius: 4px; overflow: hidden; }
+      #route-form .seg-toggle button {
+        padding: 3px 8px;
+        background: #1a1a1a;
+        color: #aaa;
+        border: 0;
+        border-radius: 0;
+        font: inherit;
+        font-size: 11px;
+      }
+      #route-form .seg-toggle button.active { background: #2c4a6e; color: #fff; }
+      #route-form .seg-toggle button:hover:not(.active) { background: #262626; }
+      #arr-duration { width: 80px; }
       #route-status { color: #aaa; min-height: 1.2em; }
       #route-status.error { color: #ff6b6b; }
       #flight-hud { color: #cfe; min-height: 4.6em; white-space: pre; }
@@ -154,7 +167,13 @@
         <span id="dep-tz" class="tz-info"></span>
       </div>
       <div class="row">
-        <label>Arr <input id="arr-time" type="datetime-local" /></label>
+        <label>Arr</label>
+        <div class="seg-toggle">
+          <button type="button" id="end-mode-dt" class="active">Datetime</button>
+          <button type="button" id="end-mode-dur">Duration</button>
+        </div>
+        <input id="arr-time" type="datetime-local" />
+        <input id="arr-duration" type="text" placeholder="11h 30m" style="display: none;" />
         <span id="arr-tz" class="tz-info"></span>
       </div>
       <div class="row">
