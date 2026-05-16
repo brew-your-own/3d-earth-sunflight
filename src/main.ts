@@ -657,6 +657,26 @@ const recapTitle    = recapEl.querySelector('.title')        as HTMLDivElement;
 const recapTable    = recapEl.querySelector('table')         as HTMLTableElement;
 const recapStatsTitle = recapEl.querySelector('.stats-title') as HTMLDivElement;
 const recapStatsTable = recapEl.querySelector('table.stats')  as HTMLTableElement;
+const sunIcon         = document.getElementById('sun-icon')   as SVGGElement | null;
+
+// Sun orbits the plane silhouette at a fixed radius. Plane is drawn facing up
+// (-y in SVG), so:
+//   sun ahead (sF > 0, sR = 0) → top of viz
+//   sun right (sR > 0, sF = 0) → right of viz
+// Hidden during NIGHT (elev < -6°).
+const SUN_VIZ_RADIUS = 82;
+function updateSunViz(sR: number, sF: number, elevDeg: number) {
+  if (!sunIcon) return;
+  if (elevDeg < -6) {
+    sunIcon.classList.add('hidden');
+    return;
+  }
+  sunIcon.classList.remove('hidden');
+  const a = Math.atan2(sR, sF);
+  const x = SUN_VIZ_RADIUS * Math.sin(a);
+  const y = -SUN_VIZ_RADIUS * Math.cos(a);
+  sunIcon.setAttribute('transform', `translate(${x.toFixed(1)},${y.toFixed(1)})`);
+}
 
 let recapRowTimes: number[] = [];                // utcMs per row, ascending
 let recapTrEls:    HTMLTableRowElement[] = [];
@@ -737,6 +757,7 @@ function updateFlightFrame(t: number) {
   const elevDeg  = THREE.MathUtils.radToDeg(Math.asin(sU));
 
   updateRecapHighlight(utcMs);
+  updateSunViz(sR, sF, elevDeg);
 
   const utcStr = new Date(utcMs).toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
   const traveledKm  = t * flight.distanceKm;

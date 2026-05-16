@@ -180,6 +180,17 @@
       #recap table.stats td { padding: 1px 8px 1px 0; }
       #recap table.stats td.pct { color: #fff; text-align: right; padding: 1px 0 1px 12px; }
       #recap table.stats td.sun-pct { text-align: center; color: #ffe28a; padding: 2px 0; }
+      #recap .sun-viz { display: flex; justify-content: center; margin-bottom: 6px; }
+      #recap .sun-viz svg { display: block; }
+      #recap .sun-viz path.plane {
+        fill: none;
+        stroke: #cfe;
+        stroke-width: 2;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+      #recap #sun-icon { transition: opacity 0.25s; }
+      #recap #sun-icon.hidden { opacity: 0; }
     </style>
   </head>
   <body>
@@ -229,6 +240,52 @@
       <div id="flight-hud"></div>
     </form>
     <div id="recap">
+      <div class="sun-viz">
+        <svg viewBox="-100 -100 200 200" width="240" height="240">
+          <!-- Commercial jet outline (top-down, facing up):
+               rounded nose, swept main wings, smaller swept tail wings. -->
+          <path class="plane" d="
+            M 0 -62
+            L 4 -54
+            L 6 -45
+            L 6 -10
+            L 60 14
+            L 44 22
+            L 6 8
+            L 6 30
+            L 22 42
+            L 14 46
+            L 6 36
+            L 5 52
+            L 0 56
+            L -5 52
+            L -6 36
+            L -14 46
+            L -22 42
+            L -6 30
+            L -6 8
+            L -44 22
+            L -60 14
+            L -6 -10
+            L -6 -45
+            L -4 -54
+            Z" />
+          <!-- Sun (orbits around plane via JS transform). -->
+          <g id="sun-icon" transform="translate(0,-80)">
+            <circle cx="0" cy="0" r="8" fill="#ffcc33" />
+            <g stroke="#ffcc33" stroke-width="2.4" stroke-linecap="round">
+              <line x1="0" y1="-16" x2="0" y2="-12" />
+              <line x1="0" y1="12"  x2="0" y2="16" />
+              <line x1="-16" y1="0" x2="-12" y2="0" />
+              <line x1="12"  y1="0" x2="16"  y2="0" />
+              <line x1="-12" y1="-12" x2="-9" y2="-9" />
+              <line x1="9"   y1="9"   x2="12" y2="12" />
+              <line x1="-12" y1="12"  x2="-9" y2="9" />
+              <line x1="9"   y1="-9"  x2="12" y2="-12" />
+            </g>
+          </g>
+        </svg>
+      </div>
       <div class="title"></div>
       <table></table>
       <div class="stats-title"></div>
