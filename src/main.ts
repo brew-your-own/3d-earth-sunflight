@@ -198,6 +198,40 @@ function createGreatCircleLine(
   return new THREE.Line(geometry, material);
 }
 
+// Canvas-rendered label sprite for a 3-letter IATA code. Pill-shaped background
+// so it reads on light or dark terrain. Always faces the camera.
+function createIataLabel(text: string, color = '#ffcc66'): THREE.Sprite {
+  const fontSize = 64;
+  const padX = 16, padY = 8;
+  const fontStr = `bold ${fontSize}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d')!;
+  ctx.font = fontStr;
+  const tw = Math.ceil(ctx.measureText(text).width);
+  canvas.width  = tw + padX * 2;
+  canvas.height = fontSize + padY * 2;
+  // Sizing the canvas clears the 2d context — re-apply font + baseline.
+  ctx.font = fontStr;
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+  if (ctx.roundRect) {
+    ctx.beginPath();
+    ctx.roundRect(0, 0, canvas.width, canvas.height, 10);
+    ctx.fill();
+  } else {
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
+  ctx.fillStyle = color;
+  ctx.fillText(text, padX, canvas.height / 2);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const mat = new THREE.SpriteMaterial({ map: tex });
+  const sprite = new THREE.Sprite(mat);
+  const h = 0.053;
+  sprite.scale.set(h * (canvas.width / canvas.height), h, 1);
+  return sprite;
+}
+
 function createSurfaceMarker(lat: number, lon: number, color = 0xff3333): THREE.Mesh {
   const marker = new THREE.Mesh(
     new THREE.SphereGeometry(0.025, 16, 16),
@@ -228,6 +262,10 @@ function clearRoute() {
     if (obj instanceof THREE.Mesh || obj instanceof THREE.Line) {
       obj.geometry.dispose();
       (obj.material as THREE.Material).dispose();
+    } else if (obj instanceof THREE.Sprite) {
+      const mat = obj.material as THREE.SpriteMaterial;
+      mat.map?.dispose();
+      mat.dispose();
     }
   });
   currentRoute = null;
@@ -256,11 +294,21 @@ function setRoute(fromCode: string, toCode: string, viaCodes: string[] = []):
     const a = chain[i], b = chain[i + 1];
     g.add(createGreatCircleLine(a.lat, a.lon, b.lat, b.lon));
   }
+  const labelLift = EARTH_RADIUS * (PATH_LIFT + 0.04);
+  const addLabel = (code: string, lat: number, lon: number, color: string) => {
+    const label = createIataLabel(code, color);
+    label.position.copy(latLonToVec3(lat, lon, labelLift));
+    g.add(label);
+  };
   g.add(createSurfaceMarker(from.lat, from.lon, 0x33ff66));      // green = departure
-  for (const wp of waypoints) {
+  addLabel(fromCode, from.lat, from.lon, '#66ff99');
+  for (let i = 0; i < waypoints.length; i++) {
+    const wp = waypoints[i];
     g.add(createSurfaceMarker(wp.lat, wp.lon, 0xff9933));        // orange = waypoint
+    addLabel(viaCodes[i], wp.lat, wp.lon, '#ffcc66');
   }
   g.add(createSurfaceMarker(to.lat,   to.lon,   0xff3333));      // red = arrival
+  addLabel(toCode, to.lat, to.lon, '#ff7766');
   // Parented to earth → inherits axial tilt + spin, so the path stays glued
   // to the surface as the Earth rotates.
   earth.add(g);
@@ -1033,21 +1081,37 @@ function refreshHud() {
     `[C] clouds: <b>${cloudsOn ? 'on' : 'off'}</b><br>` +
     `[N] night lights: <b>${nightOn ? 'on' : 'off'}</b><br>` +
     `[L] live satellite: <b>${liveOn ? `on (${liveDateLabel})` : 'off'}</b><br>` +
-    `[G] center on Greenwich (0°,&nbsp;0°)`;
+    `[G] center on your location (Barcelona fallback)`;
 }
 
-// Reset orbit so the camera faces Earth's (lat 0, lon 0) with its north pole
+// Reset orbit so the camera faces Earth's (lat, lon) with the north pole
 // straight up. Honors current Earth rotation (idle spin + axial tilt) by
 // transforming Earth-local axes into world space. Preserves zoom distance.
-function goToGreenwich() {
+function centerOn(lat: number, lon: number) {
   const q  = earth.getWorldQuaternion(new THREE.Quaternion());
-  const wx = new THREE.Vector3(1, 0, 0).applyQuaternion(q);   // (lat 0, lon 0)
+  const wp = latLonToVec3(lat, lon, 1).applyQuaternion(q);
   const wy = new THREE.Vector3(0, 1, 0).applyQuaternion(q);   // north pole
   const dist = camera.position.distanceTo(controls.target);
   controls.target.set(0, 0, 0);
   camera.up.copy(wy);
-  camera.position.copy(wx).multiplyScalar(dist);
+  camera.position.copy(wp).multiplyScalar(dist);
   controls.update();
+}
+
+// Barcelona-El Prat airport (BCN). Used as fallback when the browser doesn't
+// know the user's location (no Geolocation API, denied, or timed out).
+const BCN_FALLBACK = { lat: 41.2974, lon: 2.0833 };
+
+function goToUserLocation() {
+  if (!navigator.geolocation) {
+    centerOn(BCN_FALLBACK.lat, BCN_FALLBACK.lon);
+    return;
+  }
+  navigator.geolocation.getCurrentPosition(
+    (pos) => centerOn(pos.coords.latitude, pos.coords.longitude),
+    ()    => centerOn(BCN_FALLBACK.lat, BCN_FALLBACK.lon),
+    { timeout: 4000, maximumAge: 5 * 60 * 1000 },
+  );
 }
 refreshHud();
 
@@ -1154,7 +1218,7 @@ window.addEventListener('keydown', (e) => {
   } else if (k === 'l') {
     setLive(!liveOn);
   } else if (k === 'g') {
-    goToGreenwich();
+    goToUserLocation();
   }
 });
 
