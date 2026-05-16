@@ -118,6 +118,17 @@
       #route-form .seg-toggle button.active { background: #2c4a6e; color: #fff; }
       #route-form .seg-toggle button:hover:not(.active) { background: #262626; }
       #arr-duration { width: 80px; }
+      #via-list { display: flex; flex-direction: column; gap: 4px; }
+      .via-item { display: flex; gap: 4px; align-items: center; }
+      .remove-via {
+        padding: 0 8px !important;
+        font-size: 14px !important;
+        line-height: 1.4;
+        background: #1a1a1a !important;
+        color: #aaa !important;
+      }
+      .remove-via:hover { color: #ff6b6b !important; }
+      .add-wp { font-size: 11px !important; padding: 3px 8px !important; }
       #route-status { color: #aaa; min-height: 1.2em; }
       #route-status.error { color: #ff6b6b; }
       #flight-hud { color: #cfe; min-height: 6em; white-space: pre; }
@@ -163,6 +174,11 @@
           <input id="route-to" class="iata" type="text" placeholder="IATA, city, or name" autocomplete="off" />
         </div>
         <button type="submit">Show route</button>
+      </div>
+      <div class="row" id="via-row">
+        <label>Via</label>
+        <div id="via-list"></div>
+        <button type="button" id="add-waypoint" class="add-wp">+ Add waypoint</button>
       </div>
       <div class="row">
         <label>Dep <input id="dep-time" type="datetime-local" /></label>

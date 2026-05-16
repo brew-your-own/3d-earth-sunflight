@@ -234,24 +234,38 @@ function clearRoute() {
   clearFlight();
 }
 
-function setRoute(fromCode: string, toCode: string):
-  | { ok: true; from: Airport; to: Airport }
+function setRoute(fromCode: string, toCode: string, viaCodes: string[] = []):
+  | { ok: true; from: Airport; to: Airport; waypoints: Airport[] }
   | { ok: false; error: string } {
   const from = airports[fromCode];
   const to   = airports[toCode];
   if (!from) return { ok: false, error: `Unknown airport: ${fromCode}` };
   if (!to)   return { ok: false, error: `Unknown airport: ${toCode}` };
+  const waypoints: Airport[] = [];
+  for (const code of viaCodes) {
+    const wp = airports[code];
+    if (!wp) return { ok: false, error: `Unknown waypoint: ${code}` };
+    waypoints.push(wp);
+  }
 
   clearRoute();
   const g = new THREE.Group();
-  g.add(createGreatCircleLine(from.lat, from.lon, to.lat, to.lon));
-  g.add(createSurfaceMarker(from.lat, from.lon, 0x33ff66));   // green = departure
-  g.add(createSurfaceMarker(to.lat,   to.lon,   0xff3333));   // red   = arrival
+  // One great-circle arc per consecutive pair (from → wp1 → wp2 → … → to).
+  const chain = [from, ...waypoints, to];
+  for (let i = 0; i < chain.length - 1; i++) {
+    const a = chain[i], b = chain[i + 1];
+    g.add(createGreatCircleLine(a.lat, a.lon, b.lat, b.lon));
+  }
+  g.add(createSurfaceMarker(from.lat, from.lon, 0x33ff66));      // green = departure
+  for (const wp of waypoints) {
+    g.add(createSurfaceMarker(wp.lat, wp.lon, 0xff9933));        // orange = waypoint
+  }
+  g.add(createSurfaceMarker(to.lat,   to.lon,   0xff3333));      // red = arrival
   // Parented to earth → inherits axial tilt + spin, so the path stays glued
   // to the surface as the Earth rotates.
   earth.add(g);
   currentRoute = g;
-  return { ok: true, from, to };
+  return { ok: true, from, to, waypoints };
 }
 
 // Expose for tinkering from the devtools console.
@@ -338,13 +352,22 @@ function subsolarPoint(utcMs: number): { lat: number; lon: number } {
 
 // ─── Flight state & animation ────────────────────────────────────────────────
 
+// One great-circle leg between two consecutive route points. tStart..tEnd is
+// the segment's slice of overall progress (t ∈ [0,1]) — split proportional to
+// arc length so the plane moves at uniform angular speed across the whole path.
+type Segment = {
+  p1: THREE.Vector3; p2: THREE.Vector3;
+  omega: number; sinOmega: number;
+  distanceKm: number;
+  tStart: number; tEnd: number;
+};
+
 type Flight = {
   from: Airport; to: Airport;
   fromCode: string; toCode: string;
+  waypoints: Airport[]; waypointCodes: string[];
   depUtcMs: number; arrUtcMs: number; durationMs: number;
-  // Cached slerp inputs (unit vectors on the sphere)
-  p1: THREE.Vector3; p2: THREE.Vector3;
-  omega: number; sinOmega: number;
+  segments: Segment[];
   distanceKm: number; speedKmh: number;
 };
 
@@ -383,19 +406,25 @@ function clearFlight() {
   hideRecap();
 }
 
-// Position + heading along the great circle. Both are in Earth's local frame
-// (unit vectors); heading is the slerp's derivative — tangent to the great
-// circle, pointing from departure toward arrival.
+// Position + heading along the piecewise great circle, given overall t ∈ [0,1].
+// Walks segments to find the active one, then slerps within it. Heading is the
+// slerp's derivative — tangent to the great circle, pointing dep → arr.
 function planeAt(f: Flight, t: number): { pos: THREE.Vector3; heading: THREE.Vector3 } {
-  const { omega, sinOmega: s, p1, p2 } = f;
-  const a = Math.sin((1 - t) * omega) / s;
-  const b = Math.sin(t * omega)       / s;
+  let seg = f.segments[f.segments.length - 1];
+  for (const s of f.segments) {
+    if (t <= s.tEnd) { seg = s; break; }
+  }
+  const span = seg.tEnd - seg.tStart;
+  const u    = span > 0 ? THREE.MathUtils.clamp((t - seg.tStart) / span, 0, 1) : 0;
+  const { omega, sinOmega: s, p1, p2 } = seg;
+  const a = Math.sin((1 - u) * omega) / s;
+  const b = Math.sin(u * omega)       / s;
   const pos = new THREE.Vector3()
     .addScaledVector(p1, a)
     .addScaledVector(p2, b)
     .normalize();
-  const ka = -omega * Math.cos((1 - t) * omega) / s;
-  const kb =  omega * Math.cos(t * omega)       / s;
+  const ka = -omega * Math.cos((1 - u) * omega) / s;
+  const kb =  omega * Math.cos(u * omega)       / s;
   const heading = new THREE.Vector3()
     .addScaledVector(p1, ka)
     .addScaledVector(p2, kb)
@@ -405,9 +434,10 @@ function planeAt(f: Flight, t: number): { pos: THREE.Vector3; heading: THREE.Vec
 
 function setFlight(
   fromCode: string, toCode: string,
-  depLocalStr: string, arrLocalStr: string
+  depLocalStr: string, arrLocalStr: string,
+  viaCodes: string[] = []
 ): { ok: true } | { ok: false; error: string } {
-  const r = setRoute(fromCode, toCode);
+  const r = setRoute(fromCode, toCode, viaCodes);
   if (!r.ok) return r;
 
   const dep = DateTime.fromISO(depLocalStr, { zone: r.from.tz });
@@ -418,15 +448,38 @@ function setFlight(
   const arrMs = arr.toMillis();
   if (arrMs <= depMs) return { ok: false, error: 'Arrival must be after departure (UTC).' };
 
-  const p1 = latLonToVec3(r.from.lat, r.from.lon, 1);
-  const p2 = latLonToVec3(r.to.lat,   r.to.lon,   1);
-  const omega = Math.acos(THREE.MathUtils.clamp(p1.dot(p2), -1, 1));
-  const distanceKm = omega * EARTH_RADIUS_KM;
+  // Build segments and split overall t-range proportional to arc length.
+  const chain = [r.from, ...r.waypoints, r.to];
+  const pts   = chain.map((ap) => latLonToVec3(ap.lat, ap.lon, 1));
+  const omegas = [] as number[];
+  let totalOmega = 0;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const w = Math.acos(THREE.MathUtils.clamp(pts[i].dot(pts[i + 1]), -1, 1));
+    omegas.push(w);
+    totalOmega += w;
+  }
+  if (totalOmega === 0) return { ok: false, error: 'Route has zero length.' };
+  const segments: Segment[] = [];
+  let cumT = 0;
+  for (let i = 0; i < omegas.length; i++) {
+    const frac = omegas[i] / totalOmega;
+    const tStart = cumT;
+    const tEnd   = i === omegas.length - 1 ? 1 : cumT + frac;
+    cumT = tEnd;
+    segments.push({
+      p1: pts[i], p2: pts[i + 1],
+      omega: omegas[i], sinOmega: Math.sin(omegas[i]),
+      distanceKm: omegas[i] * EARTH_RADIUS_KM,
+      tStart, tEnd,
+    });
+  }
+  const distanceKm = totalOmega * EARTH_RADIUS_KM;
   const durationMs = arrMs - depMs;
   flight = {
     from: r.from, to: r.to, fromCode, toCode,
+    waypoints: r.waypoints, waypointCodes: viaCodes.slice(),
     depUtcMs: depMs, arrUtcMs: arrMs, durationMs,
-    p1, p2, omega, sinOmega: Math.sin(omega),
+    segments,
     distanceKm,
     speedKmh: distanceKm / (durationMs / 3_600_000),
   };
@@ -636,6 +689,8 @@ const arrTzEl  = document.getElementById('arr-tz')     as HTMLSpanElement;
 const inDur    = document.getElementById('arr-duration') as HTMLInputElement;
 const modeDtBtn  = document.getElementById('end-mode-dt')  as HTMLButtonElement;
 const modeDurBtn = document.getElementById('end-mode-dur') as HTMLButtonElement;
+const viaList    = document.getElementById('via-list')     as HTMLDivElement;
+const addWpBtn   = document.getElementById('add-waypoint') as HTMLButtonElement;
 const playBtn  = document.getElementById('play-btn')   as HTMLButtonElement;
 const scrubEl  = document.getElementById('scrub')      as HTMLInputElement;
 const statusEl = document.getElementById('route-status') as HTMLDivElement;
@@ -649,6 +704,19 @@ function commitAirportInput(inputEl: HTMLInputElement): string {
   const code = resolveAirportCode(inputEl.value);
   if (code) inputEl.value = code;
   return code;
+}
+
+// Read each waypoint input; resolve to IATA (committing the value back to the
+// input). Skip empty rows so the default no-waypoint case still works.
+function collectWaypointCodes(): string[] {
+  const inputs = Array.from(viaList.querySelectorAll('input.via')) as HTMLInputElement[];
+  const codes: string[] = [];
+  for (const inp of inputs) {
+    if (!inp.value.trim()) continue;
+    const code = commitAirportInput(inp);
+    if (code) codes.push(code);
+  }
+  return codes;
 }
 
 // "America/New_York (UTC−4)" for the given local datetime in that zone.
@@ -760,9 +828,11 @@ function submitRoute() {
     showStatus('Could not match both airports — try IATA, city, or name.', true);
     return;
   }
-  const r = setRoute(from, to);
+  const via = collectWaypointCodes();
+  const r = setRoute(from, to, via);
   if (r.ok) {
-    showStatus(`${from} ${r.from.city} → ${to} ${r.to.city}`);
+    const viaStr = via.length > 0 ? ` via ${via.join(' → ')}` : '';
+    showStatus(`${from} ${r.from.city} → ${to} ${r.to.city}${viaStr}`);
     lastRouteFrom = r.from;
     lastRouteTo   = r.to;
     // The hidden mode's field becomes meaningful now that we have TZs.
@@ -876,9 +946,11 @@ playBtn.addEventListener('click', () => {
     showStatus('Set both departure and arrival times.', true);
     return;
   }
-  const r = setFlight(fromCode, toCode, inDep.value, inArr.value);
+  const via = collectWaypointCodes();
+  const r = setFlight(fromCode, toCode, inDep.value, inArr.value, via);
   if (!r.ok) { showStatus(r.error, true); return; }
-  showStatus(`${fromCode} ${flight!.from.city} → ${toCode} ${flight!.to.city}`);
+  const viaStr = via.length > 0 ? ` via ${via.join(' → ')}` : '';
+  showStatus(`${fromCode} ${flight!.from.city} → ${toCode} ${flight!.to.city}${viaStr}`);
   if (progress >= 1) progress = 0;
   scrubEl.value = String(Math.round(progress * 1000));
   playing = true;
@@ -898,6 +970,32 @@ function toLocalIso(d: Date): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
          `T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
+
+function addWaypointRow(prefill = '') {
+  const item  = document.createElement('div');
+  item.className = 'via-item';
+  const combo = document.createElement('div');
+  combo.className = 'iata-combo';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'iata via';
+  input.placeholder = 'IATA, city, or name';
+  input.autocomplete = 'off';
+  if (prefill) input.value = prefill;
+  combo.appendChild(input);
+  const rm = document.createElement('button');
+  rm.type = 'button';
+  rm.className = 'remove-via';
+  rm.title = 'Remove waypoint';
+  rm.textContent = '×';
+  rm.addEventListener('click', () => item.remove());
+  item.append(combo, rm);
+  viaList.appendChild(item);
+  setupAirportAutocomplete(input);
+  input.focus();
+}
+
+addWpBtn.addEventListener('click', () => addWaypointRow());
 
 airports = airportsData as Record<string, Airport>;
 setupAirportAutocomplete(inFrom, () => inTo.focus());
