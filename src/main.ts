@@ -257,6 +257,55 @@ function setRoute(fromCode: string, toCode: string):
 // Expose for tinkering from the devtools console.
 (window as unknown as { setRoute: typeof setRoute }).setRoute = setRoute;
 
+// ─── Airport search (autocomplete) ──────────────────────────────────────────
+
+const MAX_SUGGESTIONS = 8;
+
+type Suggestion = { code: string; ap: Airport };
+
+// Rank: exact IATA > IATA prefix > exact city > city prefix > name prefix >
+// city contains > name contains > IATA contains. Returns top N.
+function searchAirports(query: string): Suggestion[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  const hits: Array<{ code: string; ap: Airport; score: number }> = [];
+  for (const code in airports) {
+    const ap = airports[code];
+    const codeL = code.toLowerCase();
+    const cityL = (ap.city || '').toLowerCase();
+    const nameL = (ap.name || '').toLowerCase();
+    let score = 0;
+    if      (codeL === q)            score = 1000;
+    else if (codeL.startsWith(q))    score = 900;
+    else if (cityL === q)            score = 800;
+    else if (cityL.startsWith(q))    score = 700;
+    else if (nameL.startsWith(q))    score = 600;
+    else if (cityL.includes(q))      score = 500;
+    else if (nameL.includes(q))      score = 400;
+    else if (codeL.includes(q))      score = 300;
+    else continue;
+    hits.push({ code, ap, score });
+  }
+  hits.sort((a, b) => b.score - a.score || a.code.localeCompare(b.code));
+  return hits.slice(0, MAX_SUGGESTIONS).map(({ code, ap }) => ({ code, ap }));
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+}
+
+// Resolve raw input text → IATA code. If user typed exactly a known IATA,
+// use it; otherwise pick the top search hit. Returns '' if nothing matches.
+function resolveAirportCode(value: string): string {
+  const v = value.trim();
+  if (!v) return '';
+  const upper = v.toUpperCase();
+  if (v.length === 3 && airports[upper]) return upper;
+  const hits = searchAirports(v);
+  return hits[0]?.code ?? '';
+}
+
 // ─── Astronomy: subsolar point ──────────────────────────────────────────────
 
 // Subsolar point at a given UTC instant: where on Earth (lat/lon, in the
@@ -551,11 +600,17 @@ function showStatus(msg: string, error = false) {
   statusEl.classList.toggle('error', error);
 }
 
+function commitAirportInput(inputEl: HTMLInputElement): string {
+  const code = resolveAirportCode(inputEl.value);
+  if (code) inputEl.value = code;
+  return code;
+}
+
 function submitRoute() {
-  const from = inFrom.value.trim().toUpperCase();
-  const to   = inTo.value.trim().toUpperCase();
-  if (from.length !== 3 || to.length !== 3) {
-    showStatus('Both codes must be 3 letters (IATA).', true);
+  const from = commitAirportInput(inFrom);
+  const to   = commitAirportInput(inTo);
+  if (!from || !to) {
+    showStatus('Could not match both airports — try IATA, city, or name.', true);
     return;
   }
   const r = setRoute(from, to);
@@ -571,6 +626,80 @@ form.addEventListener('submit', (e) => {
   submitRoute();
 });
 
+// ─── Autocomplete wiring ─────────────────────────────────────────────────────
+
+function setupAirportAutocomplete(input: HTMLInputElement, onPicked?: () => void) {
+  const container = input.parentElement!;        // wrapped in <div class="iata-combo">
+  const list = document.createElement('ul');
+  list.className = 'iata-suggest';
+  container.appendChild(list);
+
+  let suggestions: Suggestion[] = [];
+  let selectedIdx = -1;
+
+  function close() {
+    list.classList.remove('open');
+    list.innerHTML = '';
+    suggestions = [];
+    selectedIdx = -1;
+  }
+
+  function render() {
+    list.innerHTML = '';
+    suggestions.forEach((s, i) => {
+      const li = document.createElement('li');
+      if (i === selectedIdx) li.className = 'selected';
+      li.innerHTML =
+        `<span class="code">${s.code}</span>` +
+        `<span class="where">${escapeHtml(s.ap.city || '')}` +
+        (s.ap.country ? `, ${escapeHtml(s.ap.country)}` : '') +
+        `</span>` +
+        `<span class="name">${escapeHtml(s.ap.name)}</span>`;
+      // mousedown (not click): fires before the input's blur, so we can
+      // preventDefault to keep focus.
+      li.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        pick(i);
+      });
+      list.appendChild(li);
+    });
+    list.classList.toggle('open', suggestions.length > 0);
+  }
+
+  function pick(idx: number) {
+    if (idx < 0 || idx >= suggestions.length) return;
+    input.value = suggestions[idx].code;
+    close();
+    if (onPicked) onPicked();
+  }
+
+  input.addEventListener('input', () => {
+    suggestions = searchAirports(input.value);
+    selectedIdx = suggestions.length > 0 ? 0 : -1;
+    render();
+  });
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown' && suggestions.length > 0) {
+      e.preventDefault();
+      selectedIdx = (selectedIdx + 1) % suggestions.length;
+      render();
+    } else if (e.key === 'ArrowUp' && suggestions.length > 0) {
+      e.preventDefault();
+      selectedIdx = (selectedIdx - 1 + suggestions.length) % suggestions.length;
+      render();
+    } else if (e.key === 'Enter' && selectedIdx >= 0 && suggestions.length > 0) {
+      e.preventDefault();
+      pick(selectedIdx);
+    } else if (e.key === 'Escape') {
+      close();
+    }
+  });
+
+  // Blur with a small delay so a mousedown-pick has time to complete.
+  input.addEventListener('blur', () => setTimeout(close, 150));
+}
+
 // ─── Playback wiring ─────────────────────────────────────────────────────────
 
 function updatePlayBtn() {
@@ -583,10 +712,10 @@ playBtn.addEventListener('click', () => {
     updatePlayBtn();
     return;
   }
-  const fromCode = inFrom.value.trim().toUpperCase();
-  const toCode   = inTo.value.trim().toUpperCase();
-  if (fromCode.length !== 3 || toCode.length !== 3) {
-    showStatus('Both airport codes must be 3 letters.', true);
+  const fromCode = commitAirportInput(inFrom);
+  const toCode   = commitAirportInput(inTo);
+  if (!fromCode || !toCode) {
+    showStatus('Could not match both airports — try IATA, city, or name.', true);
     return;
   }
   if (!inDep.value || !inArr.value) {
@@ -617,6 +746,8 @@ function toLocalIso(d: Date): string {
 }
 
 airports = airportsData as Record<string, Airport>;
+setupAirportAutocomplete(inFrom, () => inTo.focus());
+setupAirportAutocomplete(inTo,   () => inDep.focus());
 inFrom.value = 'JFK';
 inTo.value   = 'HND';
 // Pre-fill plausible JFK→HND times: 11:30 today (JFK local) → 14:30 next day

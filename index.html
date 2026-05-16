@@ -42,15 +42,47 @@
       #route-form .row { display: flex; gap: 6px; align-items: center; }
       #route-form .row label { display: flex; gap: 6px; align-items: center; }
       #route-form input[type="text"], #route-form .iata {
-        width: 56px;
+        width: 120px;
         padding: 4px 6px;
         background: #111;
         color: #fff;
         border: 1px solid #444;
         border-radius: 4px;
         font: inherit;
-        text-transform: uppercase;
       }
+      .iata-combo { position: relative; }
+      .iata-suggest {
+        display: none;
+        position: absolute;
+        bottom: 100%;
+        left: 0;
+        margin: 0 0 4px 0;
+        padding: 4px 0;
+        list-style: none;
+        background: #1a1a1a;
+        border: 1px solid #555;
+        border-radius: 4px;
+        min-width: 340px;
+        max-height: 240px;
+        overflow-y: auto;
+        z-index: 10;
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6);
+      }
+      .iata-suggest.open { display: block; }
+      .iata-suggest li {
+        padding: 4px 10px;
+        cursor: pointer;
+        display: grid;
+        grid-template-columns: 42px 1fr;
+        column-gap: 8px;
+        font-size: 12px;
+        white-space: nowrap;
+      }
+      .iata-suggest li.selected { background: #2c4a6e; }
+      .iata-suggest li:hover { background: #24405f; }
+      .iata-suggest .code { color: #fff; font-weight: bold; }
+      .iata-suggest .where { color: #cde; }
+      .iata-suggest .name { color: #889; font-size: 11px; grid-column: 2; }
       #route-form input[type="datetime-local"] {
         padding: 3px 6px;
         background: #111;
@@ -107,9 +139,13 @@
     </div>
     <form id="route-form">
       <div class="row">
-        <input id="route-from" class="iata" type="text" maxlength="3" placeholder="JFK" autocomplete="off" />
+        <div class="iata-combo">
+          <input id="route-from" class="iata" type="text" placeholder="IATA, city, or name" autocomplete="off" />
+        </div>
         <span>→</span>
-        <input id="route-to" class="iata" type="text" maxlength="3" placeholder="HND" autocomplete="off" />
+        <div class="iata-combo">
+          <input id="route-to" class="iata" type="text" placeholder="IATA, city, or name" autocomplete="off" />
+        </div>
         <button type="submit">Show route</button>
       </div>
       <div class="row">
