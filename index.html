@@ -129,6 +129,25 @@
       }
       .remove-via:hover { color: #ff6b6b !important; }
       .add-wp { font-size: 11px !important; padding: 3px 8px !important; }
+      #presets {
+        position: fixed;
+        top: 12px;
+        right: 12px;
+        padding: 8px 10px;
+        background: rgba(0, 0, 0, 0.55);
+        border-radius: 6px;
+        color: #ddd;
+        font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+        min-width: 180px;
+      }
+      #presets .presets-title { color: #cfe; margin-bottom: 4px; font-size: 11px; }
+      #presets ul { list-style: none; padding: 0; margin: 0; }
+      #presets li {
+        padding: 3px 6px;
+        cursor: pointer;
+        border-radius: 3px;
+      }
+      #presets li:hover { background: #2c4a6e; color: #fff; }
       #route-status { color: #aaa; min-height: 1.2em; }
       #route-status.error { color: #ff6b6b; }
       #flight-hud { color: #cfe; min-height: 6em; white-space: pre; }
@@ -163,6 +182,10 @@
     <div id="info">
       <div id="info-text"></div>
       <div><label>Day/night contrast <input id="contrast" type="range" min="0" max="100" value="50" /></label></div>
+    </div>
+    <div id="presets">
+      <div class="presets-title">Preset routes</div>
+      <ul id="presets-list"></ul>
     </div>
     <form id="route-form">
       <div class="row">

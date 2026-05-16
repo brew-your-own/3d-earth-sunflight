@@ -881,6 +881,7 @@ function submitRoute() {
   if (r.ok) {
     const viaStr = via.length > 0 ? ` via ${via.join(' → ')}` : '';
     showStatus(`${from} ${r.from.city} → ${to} ${r.to.city}${viaStr}`);
+    updateUrl(from, to, via);
     lastRouteFrom = r.from;
     lastRouteTo   = r.to;
     // The hidden mode's field becomes meaningful now that we have TZs.
@@ -1019,7 +1020,7 @@ function toLocalIso(d: Date): string {
          `T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-function addWaypointRow(prefill = '') {
+function addWaypointRow(prefill = '', focus = true) {
   const item  = document.createElement('div');
   item.className = 'via-item';
   const combo = document.createElement('div');
@@ -1040,19 +1041,74 @@ function addWaypointRow(prefill = '') {
   item.append(combo, rm);
   viaList.appendChild(item);
   setupAirportAutocomplete(input);
-  input.focus();
+  if (focus) input.focus();
 }
 
 addWpBtn.addEventListener('click', () => addWaypointRow());
 
+// ─── Preset routes + URL parameters ─────────────────────────────────────────
+
+type RouteSpec = { from: string; to: string; via?: string[]; dep?: string; arr?: string };
+
+const PRESETS: RouteSpec[] = [
+  { from: 'JFK', to: 'HND' },
+  { from: 'LHR', to: 'SYD' },
+  { from: 'SFO', to: 'SIN' },
+  { from: 'JFK', to: 'HND', via: ['LAX'] },
+  { from: 'LHR', to: 'SYD', via: ['DXB', 'SIN'] },     // classic Kangaroo Route
+];
+
+// ?from=JFK&to=HND&via=LAX,SFO&dep=2026-05-16T11:30&arr=2026-05-17T14:30
+function readUrlRoute(): RouteSpec | null {
+  const p = new URLSearchParams(window.location.search);
+  const from = p.get('from')?.toUpperCase();
+  const to   = p.get('to')?.toUpperCase();
+  if (!from || !to) return null;
+  const via = (p.get('via') || '')
+    .split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
+  return {
+    from, to, via,
+    dep: p.get('dep') || undefined,
+    arr: p.get('arr') || undefined,
+  };
+}
+
+function updateUrl(from: string, to: string, via: string[]) {
+  const p = new URLSearchParams();
+  p.set('from', from);
+  p.set('to',   to);
+  if (via.length) p.set('via', via.join(','));
+  history.replaceState(null, '', `${window.location.pathname}?${p}`);
+}
+
+function applyRoute(spec: RouteSpec) {
+  inFrom.value = spec.from;
+  inTo.value   = spec.to;
+  viaList.innerHTML = '';
+  for (const code of spec.via || []) addWaypointRow(code, false);
+  if (spec.dep) inDep.value = spec.dep;
+  if (spec.arr) inArr.value = spec.arr;
+  submitRoute();
+}
+
+function renderPresets() {
+  const list = document.getElementById('presets-list') as HTMLUListElement;
+  list.innerHTML = '';
+  for (const p of PRESETS) {
+    const li = document.createElement('li');
+    const v = p.via && p.via.length ? ` via ${p.via.join(', ')}` : '';
+    li.textContent = `${p.from} → ${p.to}${v}`;
+    li.addEventListener('click', () => applyRoute(p));
+    list.appendChild(li);
+  }
+}
+
 airports = airportsData as Record<string, Airport>;
 setupAirportAutocomplete(inFrom, () => inTo.focus());
 setupAirportAutocomplete(inTo,   () => inDep.focus());
-inFrom.value = 'JFK';
-inTo.value   = 'HND';
-// Pre-fill plausible JFK→HND times: 11:30 today (JFK local) → 14:30 next day
-// (HND local). Times will be interpreted in each airport's IANA timezone
-// when "Play" is clicked.
+
+// Default times: today 11:30 → next-day 14:30 (interpreted in each airport's
+// IANA timezone when Play is clicked). URL params can override; presets don't.
 {
   const dep = new Date(); dep.setHours(11, 30, 0, 0);
   const arr = new Date(dep);
@@ -1061,7 +1117,9 @@ inTo.value   = 'HND';
   inDep.value = toLocalIso(dep);
   inArr.value = toLocalIso(arr);
 }
-submitRoute();
+
+renderPresets();
+applyRoute(readUrlRoute() || PRESETS[0]);
 
 // ─── View toggles (keyboard) ─────────────────────────────────────────────────
 
