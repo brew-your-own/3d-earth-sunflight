@@ -25,15 +25,25 @@ does on the few tests I ran. I built it to scratch an itch — it is only a fun 
 
 - Textured Earth (day map, night lights, normal map, clouds) on a tilted axis,
   with a Milky Way starfield background
-- Great-circle route between two airports (~9 000 IATA codes built in)
+- Great-circle route between two airports (~9 000 IATA codes built in), with
+  autocomplete that matches IATA code, city, or airport name
+- Optional waypoints — piecewise great-circle through any number of extra
+  airports, useful for simulating non-direct trajectories
+- IATA labels on the start, end, and each waypoint marker
 - Plane animated along the route using slerp interpolation
 - Real subsolar-point computation (NOAA formula, ~0.01° accuracy) so the sun
   direction is correct for the actual flight time
+- HUD with current position, sun side / clock direction, speed (km/h), and
+  distance traveled / remaining
 - Recap table of day / twilight / night and sun left / right transitions, in
-  the departure airport's local timezone
-- Optional live cloud overlay from NASA GIBS satellite imagery (press `L`)
-- Contrast slider for daylight / night intensity; `C` toggles clouds, `N`
-  toggles night shading
+  the departure airport's local timezone — the current segment is highlighted
+  during playback
+- Timezone + UTC offset shown next to each datetime input; arrival time can be
+  entered as a datetime or as a duration (toggle)
+- Preset routes panel and shareable URL parameters (`?from=&to=&via=`)
+- Day/night contrast slider for daylight intensity; `C` toggles clouds,
+  `N` toggles night shading, `L` toggles live NASA GIBS satellite imagery,
+  `G` centers the camera on your geolocation (Barcelona fallback)
 
 ## Run it locally
 
