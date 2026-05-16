@@ -591,6 +591,8 @@ const inFrom   = document.getElementById('route-from') as HTMLInputElement;
 const inTo     = document.getElementById('route-to')   as HTMLInputElement;
 const inDep    = document.getElementById('dep-time')   as HTMLInputElement;
 const inArr    = document.getElementById('arr-time')   as HTMLInputElement;
+const depTzEl  = document.getElementById('dep-tz')     as HTMLSpanElement;
+const arrTzEl  = document.getElementById('arr-tz')     as HTMLSpanElement;
 const playBtn  = document.getElementById('play-btn')   as HTMLButtonElement;
 const scrubEl  = document.getElementById('scrub')      as HTMLInputElement;
 const statusEl = document.getElementById('route-status') as HTMLDivElement;
@@ -606,6 +608,30 @@ function commitAirportInput(inputEl: HTMLInputElement): string {
   return code;
 }
 
+// "America/New_York (UTC−4)" for the given local datetime in that zone.
+// Offset is evaluated *at the given datetime* so DST switches are reflected.
+function formatTzInfo(tz: string, localIso: string): string {
+  if (!tz) return '';
+  const dt = localIso
+    ? DateTime.fromISO(localIso, { zone: tz })
+    : DateTime.now().setZone(tz);
+  if (!dt.isValid) return tz;
+  const offMin = dt.offset;                              // minutes east of UTC
+  const sign = offMin >= 0 ? '+' : '−';
+  const h = Math.floor(Math.abs(offMin) / 60);
+  const m = Math.abs(offMin) % 60;
+  const offStr = m === 0 ? `${sign}${h}` : `${sign}${h}:${String(m).padStart(2, '0')}`;
+  return `${tz} (UTC${offStr})`;
+}
+
+let lastRouteFrom: Airport | null = null;
+let lastRouteTo:   Airport | null = null;
+
+function refreshTzInfo() {
+  depTzEl.textContent = lastRouteFrom ? formatTzInfo(lastRouteFrom.tz, inDep.value) : '';
+  arrTzEl.textContent = lastRouteTo   ? formatTzInfo(lastRouteTo.tz,   inArr.value) : '';
+}
+
 function submitRoute() {
   const from = commitAirportInput(inFrom);
   const to   = commitAirportInput(inTo);
@@ -616,10 +642,16 @@ function submitRoute() {
   const r = setRoute(from, to);
   if (r.ok) {
     showStatus(`${from} ${r.from.city} → ${to} ${r.to.city}`);
+    lastRouteFrom = r.from;
+    lastRouteTo   = r.to;
+    refreshTzInfo();
   } else {
     showStatus(r.error, true);
   }
 }
+
+inDep.addEventListener('input', refreshTzInfo);
+inArr.addEventListener('input', refreshTzInfo);
 
 form.addEventListener('submit', (e) => {
   e.preventDefault();

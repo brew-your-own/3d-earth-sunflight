@@ -104,6 +104,7 @@
       }
       #route-form button:hover { background: #3a3a3a; }
       #route-form button:disabled { opacity: 0.45; cursor: not-allowed; }
+      .tz-info { color: #9ab; font-size: 11px; }
       #route-status { color: #aaa; min-height: 1.2em; }
       #route-status.error { color: #ff6b6b; }
       #flight-hud { color: #cfe; min-height: 4.6em; white-space: pre; }
@@ -150,9 +151,11 @@
       </div>
       <div class="row">
         <label>Dep <input id="dep-time" type="datetime-local" /></label>
+        <span id="dep-tz" class="tz-info"></span>
       </div>
       <div class="row">
         <label>Arr <input id="arr-time" type="datetime-local" /></label>
+        <span id="arr-tz" class="tz-info"></span>
       </div>
       <div class="row">
         <button id="play-btn" type="button">▶ Play</button>
