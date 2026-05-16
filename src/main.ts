@@ -600,11 +600,19 @@ function flightSampleAt(f: Flight, t: number): {
 // Scan the flight at fine resolution and collect phase / side transitions.
 // Step count ≈ 2000 → ~25 s resolution for a 14 h flight, fine for visualization.
 type RecapRow = { utcMs: number; phase: string; label: string; endpoint?: boolean };
+type RecapStats = { rightPct: number; leftPct: number; nightPct: number };
 
-function computeRecap(f: Flight): RecapRow[] {
+function computeRecap(f: Flight): { rows: RecapRow[]; stats: RecapStats } {
   const N = 2000;
   const rows: RecapRow[] = [];
+  let right = 0, left = 0, night = 0;
+  const tally = (s: { phase: string; side: string }) => {
+    if (s.phase === 'DAY') { if (s.side === 'RIGHT') right++; else left++; }
+    else if (s.phase === 'NIGHT') night++;
+  };
+
   const first = flightSampleAt(f, 0);
+  tally(first);
   const depExtra = first.phase === 'DAY' ? `, sun on the ${first.side}` : '';
   rows.push({
     utcMs: f.depUtcMs,
@@ -617,6 +625,7 @@ function computeRecap(f: Flight): RecapRow[] {
   let prevSide  = first.side;
   for (let i = 1; i <= N; i++) {
     const s = flightSampleAt(f, i / N);
+    tally(s);
     if (s.phase !== prevPhase) {
       const extra = s.phase === 'DAY' ? `, sun on the ${s.side}` : '';
       rows.push({ utcMs: s.utcMs, phase: s.phase, label: `→ ${s.phase}${extra}` });
@@ -633,25 +642,40 @@ function computeRecap(f: Flight): RecapRow[] {
     label: `Arrive ${f.toCode}`,
     endpoint: true,
   });
-  return rows;
+
+  const total = N + 1;
+  const stats: RecapStats = {
+    rightPct: (right / total) * 100,
+    leftPct:  (left  / total) * 100,
+    nightPct: (night / total) * 100,
+  };
+  return { rows, stats };
 }
 
-const recapEl     = document.getElementById('recap') as HTMLDivElement;
-const recapTitle  = recapEl.querySelector('.title')   as HTMLDivElement;
-const recapTable  = recapEl.querySelector('table')    as HTMLTableElement;
+const recapEl       = document.getElementById('recap') as HTMLDivElement;
+const recapTitle    = recapEl.querySelector('.title')        as HTMLDivElement;
+const recapTable    = recapEl.querySelector('table')         as HTMLTableElement;
+const recapStatsTitle = recapEl.querySelector('.stats-title') as HTMLDivElement;
+const recapStatsTable = recapEl.querySelector('table.stats')  as HTMLTableElement;
 
 let recapRowTimes: number[] = [];                // utcMs per row, ascending
 let recapTrEls:    HTMLTableRowElement[] = [];
 let currentRowIdx = -1;
 
 function renderRecap(f: Flight) {
-  const rows = computeRecap(f);
+  const { rows, stats } = computeRecap(f);
   recapTitle.textContent = `Phase transitions — times in ${f.from.tz}`;
   recapTable.innerHTML = rows.map((r) => {
     const t = DateTime.fromMillis(r.utcMs).setZone(f.from.tz).toFormat('LLL dd HH:mm');
     const cls = `phase-${r.phase}${r.endpoint ? ' endpoint' : ''}`;
     return `<tr class="${cls}"><td class="time">${t}</td><td class="label">${r.label}</td></tr>`;
   }).join('');
+  recapStatsTitle.textContent = 'Time breakdown';
+  const pct = (v: number) => `${v.toFixed(0)}%`;
+  recapStatsTable.innerHTML = [
+    `<tr class="phase-DAY"><td colspan="2" class="sun-pct">${pct(stats.leftPct)} ← Sun → ${pct(stats.rightPct)}</td></tr>`,
+    `<tr class="phase-NIGHT"><td class="label">Night</td><td class="pct">${pct(stats.nightPct)}</td></tr>`,
+  ].join('');
   recapEl.classList.add('visible');
   recapRowTimes = rows.map((r) => r.utcMs);
   recapTrEls    = Array.from(recapTable.querySelectorAll('tr')) as HTMLTableRowElement[];
@@ -678,6 +702,8 @@ function hideRecap() {
   recapEl.classList.remove('visible');
   recapTable.innerHTML = '';
   recapTitle.textContent = '';
+  recapStatsTable.innerHTML = '';
+  recapStatsTitle.textContent = '';
   recapRowTimes = [];
   recapTrEls = [];
   currentRowIdx = -1;
