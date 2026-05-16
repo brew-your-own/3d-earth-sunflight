@@ -345,7 +345,10 @@ type Flight = {
   // Cached slerp inputs (unit vectors on the sphere)
   p1: THREE.Vector3; p2: THREE.Vector3;
   omega: number; sinOmega: number;
+  distanceKm: number; speedKmh: number;
 };
+
+const EARTH_RADIUS_KM = 6371;
 
 let flight: Flight | null = null;
 let progress = 0;              // 0..1 along the route
@@ -418,10 +421,14 @@ function setFlight(
   const p1 = latLonToVec3(r.from.lat, r.from.lon, 1);
   const p2 = latLonToVec3(r.to.lat,   r.to.lon,   1);
   const omega = Math.acos(THREE.MathUtils.clamp(p1.dot(p2), -1, 1));
+  const distanceKm = omega * EARTH_RADIUS_KM;
+  const durationMs = arrMs - depMs;
   flight = {
     from: r.from, to: r.to, fromCode, toCode,
-    depUtcMs: depMs, arrUtcMs: arrMs, durationMs: arrMs - depMs,
+    depUtcMs: depMs, arrUtcMs: arrMs, durationMs,
     p1, p2, omega, sinOmega: Math.sin(omega),
+    distanceKm,
+    speedKmh: distanceKm / (durationMs / 3_600_000),
   };
   ensurePlane();
   progress = 0;
@@ -577,10 +584,15 @@ function updateFlightFrame(t: number) {
   const elevDeg  = THREE.MathUtils.radToDeg(Math.asin(sU));
 
   const utcStr = new Date(utcMs).toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+  const traveledKm  = t * flight.distanceKm;
+  const remainingKm = flight.distanceKm - traveledKm;
   flightHud.textContent = [
     `${utcStr}   ${(t * 100).toFixed(0)}%   [${daylightLabel(elevDeg)}]`,
     `Plane: ${fmt(planeLat)}°, ${fmt(planeLon)}°   Sun elev: ${fmt(elevDeg, 0)}°`,
     `${sideLabel(sR, sF)}   at ${formatClock(sR, sF)}`,
+    `Speed: ${Math.round(flight.speedKmh)} km/h   ` +
+      `${Math.round(traveledKm)} / ${Math.round(flight.distanceKm)} km   ` +
+      `${Math.round(remainingKm)} km left`,
   ].join('\n');
 }
 
