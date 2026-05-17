@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>3D in Browser</title>
+    <title>3D Sun Flight</title>
     <style>
       * { margin: 0; padding: 0; box-sizing: border-box; }
       body { overflow: hidden; background: #000; }
@@ -25,6 +25,13 @@
         pointer-events: auto;
       }
       #info label { display: inline-flex; gap: 6px; align-items: center; }
+      #info-text a {
+        color: #aaa;
+        pointer-events: auto;
+        text-decoration: none;
+      }
+      #info-text a:hover { color: #fff; }
+      #info-text a.github-link { vertical-align: -3px; margin-right: 4px; }
       #route-form {
         position: fixed;
         bottom: 12px;
