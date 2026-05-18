@@ -1093,6 +1093,10 @@ function updatePlayBtn() {
   playBtn.textContent = playing ? '⏸ Pause' : '▶ Play';
 }
 
+// Signature of the inputs used to build the currently-loaded flight. Lets Play
+// distinguish "resume the paused flight" from "the form changed, rebuild".
+let flightInputSig: string | null = null;
+
 playBtn.addEventListener('click', () => {
   if (playing) {
     playing = false;
@@ -1110,8 +1114,20 @@ playBtn.addEventListener('click', () => {
     return;
   }
   const via = collectWaypointCodes();
+  const sig = [fromCode, toCode, inDep.value, inArr.value, ...via].join('|');
+
+  // Resume in place if the flight on screen was built from these exact inputs
+  // and we're partway through. Otherwise (no flight, inputs changed, or at end)
+  // rebuild from scratch.
+  if (flight && sig === flightInputSig && progress < 1) {
+    playing = true;
+    updatePlayBtn();
+    return;
+  }
+
   const r = setFlight(fromCode, toCode, inDep.value, inArr.value, via);
   if (!r.ok) { showStatus(r.error, true); return; }
+  flightInputSig = sig;
   const viaStr = via.length > 0 ? ` via ${via.join(' → ')}` : '';
   showStatus(`${fromCode} ${flight!.from.city} → ${toCode} ${flight!.to.city}${viaStr}`);
   if (progress >= 1) progress = 0;
@@ -1262,6 +1278,7 @@ function refreshHud() {
     `<span class="hud-cmd" data-key="n">[N] night lights: <b>${nightOn ? 'on' : 'off'}</b></span><br>` +
     `<span class="hud-cmd" data-key="l">[L] live satellite: <b>${liveOn ? `on (${liveDateLabel})` : 'off'}</b></span><br>` +
     `<span class="hud-cmd" data-key="m">[M] control mode: <b>${controlMode}</b></span><br>` +
+    `<span class="hud-cmd" data-key=" ">[Space] play/pause</span><br>` +
     `<span class="hud-cmd" data-key="g">[G] center on your location (Barcelona fallback)</span>`;
 }
 
@@ -1392,13 +1409,18 @@ const hudActions: Record<string, () => void> = {
   l: () => { setLive(!liveOn); },
   g: () => { goToUserLocation(); },
   m: () => { controlMode = (controlMode === 'orbit') ? 'globe' : 'orbit'; applyControlMode(); refreshHud(); },
+  ' ': () => { playBtn.click(); },
 };
 
 window.addEventListener('keydown', (e) => {
   // Ignore if a text field is focused (none here yet, but cheap to be safe)
   if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
   const action = hudActions[e.key.toLowerCase()];
-  if (action) action();
+  if (!action) return;
+  // Stop space from re-triggering a focused button (it would double-fire after a click)
+  // and from scrolling the page.
+  if (e.key === ' ') e.preventDefault();
+  action();
 });
 
 // Click delegation: any element inside #info-text carrying data-key="<letter>"
