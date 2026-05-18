@@ -43,6 +43,73 @@ controls.minDistance = 2.6;
 controls.maxDistance = 30;
 controls.target.set(0, 0, 0);
 
+// Two control modes (toggle with [M]):
+//   'orbit' — OrbitControls drives the camera; left-drag rotates view freely (current default).
+//   'globe' — OrbitControls' rotate is disabled; left-drag rotates Earth around its pole,
+//             right-drag rotates around the equatorial axis parallel to the screen.
+type ControlMode = 'orbit' | 'globe';
+let controlMode: ControlMode = 'orbit';
+
+function applyControlMode() {
+  controls.enableRotate = (controlMode === 'orbit');
+}
+applyControlMode();
+
+// Suppress the OS context menu on the canvas so right-drag is usable in globe mode
+// (and harmless in orbit mode, where right-click currently does nothing).
+renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
+
+// Custom pointer drag for globe mode. Listeners are always attached but only act
+// when controlMode === 'globe'; OrbitControls is short-circuited by enableRotate=false
+// and the pre-existing enablePan=false, so the two systems don't collide.
+const POLE_SENSITIVITY = 0.005;   // rad per pixel (horizontal drag, left button)
+const EQ_SENSITIVITY   = 0.005;   // rad per pixel (vertical drag, right button)
+let activeDrag: { button: number; x: number; y: number; pointerId: number } | null = null;
+
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  if (controlMode !== 'globe') return;
+  if (e.button !== 0 && e.button !== 2) return;
+  activeDrag = { button: e.button, x: e.clientX, y: e.clientY, pointerId: e.pointerId };
+  renderer.domElement.setPointerCapture(e.pointerId);
+});
+
+renderer.domElement.addEventListener('pointermove', (e) => {
+  if (!activeDrag || e.pointerId !== activeDrag.pointerId) return;
+  const dx = e.clientX - activeDrag.x;
+  const dy = e.clientY - activeDrag.y;
+  activeDrag.x = e.clientX;
+  activeDrag.y = e.clientY;
+
+  if (activeDrag.button === 0) {
+    // Left: rotate Earth around its own pole (local +Y, already tilted 23.4°).
+    const angle = dx * POLE_SENSITIVITY;
+    earth.rotateY(angle);
+    clouds.rotateY(angle);
+  } else if (activeDrag.button === 2) {
+    // Right: rotate around the world-space axis that lies in Earth's equatorial
+    // plane AND is parallel to the screen (i.e., the intersection of the equatorial
+    // plane and the screen plane). Direction = pole × view.
+    const view = controls.target.clone().sub(camera.position).normalize();
+    const pole = new THREE.Vector3(0, 1, 0).applyQuaternion(earth.quaternion).normalize();
+    const eqAxis = pole.clone().cross(view);
+    if (eqAxis.lengthSq() < 1e-6) return;   // singular when looking straight along the pole
+    eqAxis.normalize();
+    // Drag down (dy > 0) tips the north pole toward the camera, which is the
+    // familiar tabletop-globe gesture.
+    const q = new THREE.Quaternion().setFromAxisAngle(eqAxis, dy * EQ_SENSITIVITY);
+    earth.quaternion.premultiply(q);
+    clouds.quaternion.premultiply(q);
+  }
+});
+
+function endDrag(e: PointerEvent) {
+  if (!activeDrag || e.pointerId !== activeDrag.pointerId) return;
+  renderer.domElement.releasePointerCapture(e.pointerId);
+  activeDrag = null;
+}
+renderer.domElement.addEventListener('pointerup', endDrag);
+renderer.domElement.addEventListener('pointercancel', endDrag);
+
 // ─── Lights ──────────────────────────────────────────────────────────────────
 
 // Very dim ambient so the unlit side isn't pitch black before city lights show.
@@ -1181,8 +1248,11 @@ let liveDateLabel = '';  // YYYY-MM-DD currently displayed when live is on
 const hud = document.getElementById('info-text')!;
 
 function refreshHud() {
+  const gestures = controlMode === 'orbit'
+    ? `Orbit: left-drag`
+    : `Spin: left-drag &nbsp;|&nbsp; Tilt: right-drag`;
   hud.innerHTML =
-    `Orbit: left-drag &nbsp;|&nbsp; Zoom: scroll &nbsp;|&nbsp; ` +
+    `${gestures} &nbsp;|&nbsp; Zoom: scroll &nbsp;|&nbsp; ` +
     `<a class="github-link" href="https://github.com/brew-your-own/3d-earth-sunflight" target="_blank" rel="noopener" aria-label="GitHub repository">` +
     `<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true">` +
     `<path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>` +
@@ -1191,6 +1261,7 @@ function refreshHud() {
     `[C] clouds: <b>${cloudsOn ? 'on' : 'off'}</b><br>` +
     `[N] night lights: <b>${nightOn ? 'on' : 'off'}</b><br>` +
     `[L] live satellite: <b>${liveOn ? `on (${liveDateLabel})` : 'off'}</b><br>` +
+    `[M] control mode: <b>${controlMode}</b><br>` +
     `[G] center on your location (Barcelona fallback)`;
 }
 
@@ -1329,6 +1400,10 @@ window.addEventListener('keydown', (e) => {
     setLive(!liveOn);
   } else if (k === 'g') {
     goToUserLocation();
+  } else if (k === 'm') {
+    controlMode = (controlMode === 'orbit') ? 'globe' : 'orbit';
+    applyControlMode();
+    refreshHud();
   }
 });
 
@@ -1358,8 +1433,9 @@ function animate() {
     updateFlightFrame(progress);
     // Clouds keep drifting subtly even during playback for visual life.
     clouds.rotation.y += dt * 0.01;
-  } else {
+  } else if (controlMode === 'orbit') {
     // Idle: slow Earth spin, fixed sun from Phase 1.
+    // Suspended in 'globe' mode so user drags aren't fought by the spin.
     earth.rotation.y  += dt * 0.05;
     clouds.rotation.y += dt * 0.065;
   }
