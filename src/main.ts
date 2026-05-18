@@ -1258,11 +1258,11 @@ function refreshHud() {
     `<path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>` +
     `</svg></a>` +
     `Rev: <a href="https://github.com/brew-your-own/3d-earth-sunflight/commit/${__GIT_REV__}" target="_blank" rel="noopener">${__GIT_REV__}</a><br>` +
-    `[C] clouds: <b>${cloudsOn ? 'on' : 'off'}</b><br>` +
-    `[N] night lights: <b>${nightOn ? 'on' : 'off'}</b><br>` +
-    `[L] live satellite: <b>${liveOn ? `on (${liveDateLabel})` : 'off'}</b><br>` +
-    `[M] control mode: <b>${controlMode}</b><br>` +
-    `[G] center on your location (Barcelona fallback)`;
+    `<span class="hud-cmd" data-key="c">[C] clouds: <b>${cloudsOn ? 'on' : 'off'}</b></span><br>` +
+    `<span class="hud-cmd" data-key="n">[N] night lights: <b>${nightOn ? 'on' : 'off'}</b></span><br>` +
+    `<span class="hud-cmd" data-key="l">[L] live satellite: <b>${liveOn ? `on (${liveDateLabel})` : 'off'}</b></span><br>` +
+    `<span class="hud-cmd" data-key="m">[M] control mode: <b>${controlMode}</b></span><br>` +
+    `<span class="hud-cmd" data-key="g">[G] center on your location (Barcelona fallback)</span>`;
 }
 
 // Reset orbit so the camera faces Earth's (lat, lon) with the north pole
@@ -1384,27 +1384,30 @@ function setLive(on: boolean) {
   }
 }
 
+// Single dispatch table for hotkey actions, so the keyboard handler and the
+// clickable HUD lines invoke the same code paths.
+const hudActions: Record<string, () => void> = {
+  c: () => { cloudsOn = !cloudsOn; clouds.visible = cloudsOn; refreshHud(); },
+  n: () => { nightOn = !nightOn; earthMat.emissiveIntensity = nightOn ? NIGHT_INTENSITY : 0; refreshHud(); },
+  l: () => { setLive(!liveOn); },
+  g: () => { goToUserLocation(); },
+  m: () => { controlMode = (controlMode === 'orbit') ? 'globe' : 'orbit'; applyControlMode(); refreshHud(); },
+};
+
 window.addEventListener('keydown', (e) => {
   // Ignore if a text field is focused (none here yet, but cheap to be safe)
   if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
-  const k = e.key.toLowerCase();
-  if (k === 'c') {
-    cloudsOn = !cloudsOn;
-    clouds.visible = cloudsOn;
-    refreshHud();
-  } else if (k === 'n') {
-    nightOn = !nightOn;
-    earthMat.emissiveIntensity = nightOn ? NIGHT_INTENSITY : 0;
-    refreshHud();
-  } else if (k === 'l') {
-    setLive(!liveOn);
-  } else if (k === 'g') {
-    goToUserLocation();
-  } else if (k === 'm') {
-    controlMode = (controlMode === 'orbit') ? 'globe' : 'orbit';
-    applyControlMode();
-    refreshHud();
-  }
+  const action = hudActions[e.key.toLowerCase()];
+  if (action) action();
+});
+
+// Click delegation: any element inside #info-text carrying data-key="<letter>"
+// triggers the matching hudActions entry, mirroring the keyboard shortcut.
+hud.addEventListener('click', (e) => {
+  const el = (e.target as HTMLElement).closest<HTMLElement>('[data-key]');
+  if (!el) return;
+  const action = hudActions[el.dataset.key!];
+  if (action) action();
 });
 
 // ─── Resize ──────────────────────────────────────────────────────────────────
