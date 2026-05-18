@@ -667,14 +667,15 @@ function flightSampleAt(f: Flight, t: number): {
 // Scan the flight at fine resolution and collect phase / side transitions.
 // Step count ≈ 2000 → ~25 s resolution for a 14 h flight, fine for visualization.
 type RecapRow = { utcMs: number; phase: string; label: string; endpoint?: boolean };
-type RecapStats = { rightPct: number; leftPct: number; nightPct: number };
+type RecapStats = { rightPct: number; leftPct: number; twilightPct: number; nightPct: number };
 
 function computeRecap(f: Flight): { rows: RecapRow[]; stats: RecapStats } {
   const N = 2000;
   const rows: RecapRow[] = [];
-  let right = 0, left = 0, night = 0;
+  let right = 0, left = 0, twilight = 0, night = 0;
   const tally = (s: { phase: string; side: string }) => {
     if (s.phase === 'DAY') { if (s.side === 'RIGHT') right++; else left++; }
+    else if (s.phase === 'TWILIGHT') twilight++;
     else if (s.phase === 'NIGHT') night++;
   };
 
@@ -712,9 +713,10 @@ function computeRecap(f: Flight): { rows: RecapRow[]; stats: RecapStats } {
 
   const total = N + 1;
   const stats: RecapStats = {
-    rightPct: (right / total) * 100,
-    leftPct:  (left  / total) * 100,
-    nightPct: (night / total) * 100,
+    rightPct:    (right    / total) * 100,
+    leftPct:     (left     / total) * 100,
+    twilightPct: (twilight / total) * 100,
+    nightPct:    (night    / total) * 100,
   };
   return { rows, stats };
 }
@@ -761,6 +763,7 @@ function renderRecap(f: Flight) {
   const pct = (v: number) => `${v.toFixed(0)}%`;
   recapStatsTable.innerHTML = [
     `<tr class="phase-DAY"><td colspan="2" class="sun-pct">${pct(stats.leftPct)} ← Sun → ${pct(stats.rightPct)}</td></tr>`,
+    `<tr class="phase-TWILIGHT"><td class="label">Twilight</td><td class="pct">${pct(stats.twilightPct)}</td></tr>`,
     `<tr class="phase-NIGHT"><td class="label">Night</td><td class="pct">${pct(stats.nightPct)}</td></tr>`,
   ].join('');
   recapEl.classList.add('visible');
