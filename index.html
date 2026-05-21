@@ -8,50 +8,86 @@
       * { margin: 0; padding: 0; box-sizing: border-box; }
       body { overflow: hidden; background: #000; }
       canvas { display: block; }
-      #info {
+
+      /* ─── Collapsible panels (shared) ────────────────────────────────────
+         Three corner panels (settings / route / recap) all collapse to a
+         compact header via a single `.collapsed` class toggled by JS. */
+      .panel {
         position: fixed;
-        top: 12px;
-        left: 12px;
-        color: #aaa;
-        font: 13px/1.6 monospace;
-        pointer-events: none;
+        background: rgba(0, 0, 0, 0.55);
+        border-radius: 6px;
+        color: #ddd;
+        z-index: 5;
+      }
+      /* Compact, content-width toggle — identical for all three panels. */
+      .panel-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 6px;
+        background: transparent;
+        border: 0;
+        color: #cfe;
+        font: inherit;
+        cursor: pointer;
+        text-align: left;
         user-select: none;
       }
-      /* Only the slider intercepts pointer events — clicks still reach the canvas elsewhere. */
+      .panel-toggle:hover { color: #fff; }
+      .panel-toggle .chevron {
+        font-size: 10px;
+        transition: transform 0.15s;
+        transform: rotate(90deg);          /* expanded: disclosure open */
+      }
+      .panel.collapsed .panel-toggle .chevron { transform: rotate(0deg); }
+      .panel-body { display: flex; flex-direction: column; }
+      .panel.collapsed .panel-body { display: none; }
+
+      /* ─── Settings panel (top-left) ──────────────────────────────────── */
+      #info {
+        top: 12px;
+        left: 12px;
+        width: min(330px, calc(100vw - 24px));
+        font: 13px/1.6 monospace;
+      }
+      /* Collapsed: shrink the box to the toggle so it isn't a wide empty panel. */
+      #info.collapsed { width: fit-content; }
+      #info .panel-body { padding: 2px 10px 10px; color: #aaa; }
       #info input[type="range"] {
         width: 110px;
         accent-color: #66aaff;
         vertical-align: middle;
-        pointer-events: auto;
       }
       #info label { display: inline-flex; gap: 6px; align-items: center; }
-      #info-text a {
-        color: #aaa;
-        pointer-events: auto;
-        text-decoration: none;
-      }
+      #info-text a { color: #aaa; text-decoration: none; }
       #info-text a:hover { color: #fff; }
       #info-text a.github-link { vertical-align: -3px; margin-right: 4px; }
-      #info-text .hud-cmd {
-        pointer-events: auto;
-        cursor: pointer;
-        user-select: none;
-      }
+      #info-text .hud-cmd { cursor: pointer; user-select: none; }
       #info-text .hud-cmd:hover { color: #fff; }
+
+      /* ─── Route panel (bottom-left) ──────────────────────────────────── */
       #route-form {
-        position: fixed;
         bottom: 12px;
         left: 12px;
-        padding: 10px 12px;
-        background: rgba(0, 0, 0, 0.55);
-        border-radius: 6px;
-        color: #ddd;
+        width: min(440px, calc(100vw - 24px));
         font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
         display: flex;
         flex-direction: column;
-        gap: 6px;
-        min-width: 420px;
       }
+      #route-form .panel-body {
+        gap: 6px;
+        padding: 10px 12px;
+      }
+      #route-form .panel-bar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 10px;
+      }
+      #route-form:not(.collapsed) .panel-bar {
+        border-top: 1px solid rgba(255, 255, 255, 0.08);
+      }
+      #scrub { flex: 1; min-width: 0; accent-color: #66aaff; }
       #route-form .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
       #route-form .row label { display: flex; gap: 6px; align-items: center; }
       #route-form input[type="text"], #route-form .iata {
@@ -76,6 +112,7 @@
         border: 1px solid #555;
         border-radius: 4px;
         min-width: 340px;
+        max-width: calc(100vw - 48px);
         max-height: 240px;
         overflow-y: auto;
         z-index: 10;
@@ -105,7 +142,6 @@
         font: inherit;
         color-scheme: dark;
       }
-      #route-form input[type="range"] { width: 300px; accent-color: #66aaff; }
       #route-form button {
         padding: 4px 10px;
         background: #2a2a2a;
@@ -142,43 +178,40 @@
       }
       .remove-via:hover { color: #ff6b6b !important; }
       .add-wp { font-size: 11px !important; padding: 3px 8px !important; }
-      #presets {
-        position: fixed;
-        top: 12px;
-        right: 12px;
-        padding: 8px 10px;
-        background: rgba(0, 0, 0, 0.55);
-        border-radius: 6px;
-        color: #ddd;
-        font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
-        min-width: 180px;
-      }
-      #presets .presets-title { color: #cfe; margin-bottom: 4px; font-size: 11px; }
-      #presets ul { list-style: none; padding: 0; margin: 0; }
-      #presets li {
+      #route-status { color: #aaa; min-height: 1.2em; }
+      #route-status.error { color: #ff6b6b; }
+      #flight-hud { color: #cfe; min-height: 6em; white-space: pre; }
+
+      /* Presets, merged into the route panel. */
+      .presets-section { margin-top: 2px; }
+      .presets-title { color: #cfe; margin-bottom: 4px; font-size: 11px; }
+      #presets-list { list-style: none; padding: 0; margin: 0; }
+      #presets-list li {
         padding: 3px 6px;
         cursor: pointer;
         border-radius: 3px;
       }
-      #presets li:hover { background: #2c4a6e; color: #fff; }
-      #route-status { color: #aaa; min-height: 1.2em; }
-      #route-status.error { color: #ff6b6b; }
-      #flight-hud { color: #cfe; min-height: 6em; white-space: pre; }
+      #presets-list li:hover { background: #2c4a6e; color: #fff; }
+
+      /* ─── Recap panel (top-right) ────────────────────────────────────── */
       #recap {
-        position: fixed;
-        bottom: 12px;
+        top: 12px;
         right: 12px;
-        padding: 10px 12px;
-        background: rgba(0, 0, 0, 0.55);
-        border-radius: 6px;
-        color: #ddd;
+        /* Shrink-wrap the content: when collapsed the box hugs the plane;
+           when expanded it grows to the recap table. */
+        width: fit-content;
+        max-width: calc(100vw - 24px);
         font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
-        max-height: 70vh;
-        overflow-y: auto;
-        min-width: 240px;
         display: none;
       }
-      #recap.visible { display: block; }
+      /* Column layout, right-aligned: toggle, plane and table all hug the
+         screen edge, clear of the iPhone notch (panel is anchored top-right). */
+      #recap.visible { display: flex; flex-direction: column; align-items: flex-end; }
+      #recap .panel-body {
+        padding: 0 12px 10px;
+        max-height: 60vh;
+        overflow-y: auto;
+      }
       #recap .title { margin-bottom: 6px; color: #cfe; }
       #recap table { border-collapse: collapse; }
       #recap td { padding: 1px 10px 1px 0; vertical-align: top; }
@@ -193,8 +226,9 @@
       #recap table.stats td { padding: 1px 8px 1px 0; }
       #recap table.stats td.pct { color: #fff; text-align: right; padding: 1px 0 1px 12px; }
       #recap table.stats td.sun-pct { text-align: center; color: #ffe28a; padding: 2px 0; }
-      #recap .sun-viz { display: flex; justify-content: center; margin-bottom: 6px; }
-      #recap .sun-viz svg { display: block; }
+      #recap .sun-viz { display: flex; justify-content: flex-end; padding: 2px 6px 6px; }
+      /* 150px on desktop, ~80px on a 390px-wide iPhone, scaling between. */
+      #recap .sun-viz svg { display: block; width: min(150px, 20.5vw); height: auto; }
       #recap .sun-viz path.plane {
         fill: none;
         stroke: #cfe;
@@ -207,52 +241,68 @@
     </style>
   </head>
   <body>
-    <div id="info">
-      <div id="info-text"></div>
-      <div><label>Day/night contrast <input id="contrast" type="range" min="0" max="100" value="50" /></label></div>
+    <div id="info" class="panel">
+      <button type="button" class="panel-toggle">
+        <span class="chevron">▸</span>
+        <span>Settings</span>
+      </button>
+      <div class="panel-body">
+        <div id="info-text"></div>
+        <div><label>Day/night contrast <input id="contrast" type="range" min="0" max="100" value="50" /></label></div>
+      </div>
     </div>
-    <div id="presets">
-      <div class="presets-title">Preset routes</div>
-      <ul id="presets-list"></ul>
-    </div>
-    <form id="route-form">
-      <div class="row">
-        <div class="iata-combo">
-          <input id="route-from" class="iata" type="text" placeholder="IATA, city, or name" autocomplete="off" />
+    <form id="route-form" class="panel">
+      <div class="panel-body">
+        <div class="row">
+          <div class="iata-combo">
+            <input id="route-from" class="iata" type="text" placeholder="IATA, city, or name" autocomplete="off" />
+          </div>
+          <span>→</span>
+          <div class="iata-combo">
+            <input id="route-to" class="iata" type="text" placeholder="IATA, city, or name" autocomplete="off" />
+          </div>
+          <button type="submit">Show route</button>
         </div>
-        <span>→</span>
-        <div class="iata-combo">
-          <input id="route-to" class="iata" type="text" placeholder="IATA, city, or name" autocomplete="off" />
+        <div class="row" id="via-row">
+          <label>Via</label>
+          <div id="via-list"></div>
+          <button type="button" id="add-waypoint" class="add-wp">+ Add waypoint</button>
         </div>
-        <button type="submit">Show route</button>
-      </div>
-      <div class="row" id="via-row">
-        <label>Via</label>
-        <div id="via-list"></div>
-        <button type="button" id="add-waypoint" class="add-wp">+ Add waypoint</button>
-      </div>
-      <div class="row">
-        <label>Dep <input id="dep-time" type="datetime-local" /></label>
-        <span id="dep-tz" class="tz-info"></span>
-      </div>
-      <div class="row">
-        <label>Arr</label>
-        <div class="seg-toggle">
-          <button type="button" id="end-mode-dt" class="active">Datetime</button>
-          <button type="button" id="end-mode-dur">Duration</button>
+        <div class="row">
+          <label>Dep <input id="dep-time" type="datetime-local" /></label>
+          <span id="dep-tz" class="tz-info"></span>
         </div>
-        <input id="arr-time" type="datetime-local" />
-        <input id="arr-duration" type="text" placeholder="11h 30m" style="display: none;" />
-        <span id="arr-tz" class="tz-info"></span>
+        <div class="row">
+          <label>Arr</label>
+          <div class="seg-toggle">
+            <button type="button" id="end-mode-dt" class="active">Datetime</button>
+            <button type="button" id="end-mode-dur">Duration</button>
+          </div>
+          <input id="arr-time" type="datetime-local" />
+          <input id="arr-duration" type="text" placeholder="11h 30m" style="display: none;" />
+          <span id="arr-tz" class="tz-info"></span>
+        </div>
+        <div id="route-status"></div>
+        <div id="flight-hud"></div>
+        <div class="presets-section">
+          <div class="presets-title">Preset routes</div>
+          <ul id="presets-list"></ul>
+        </div>
       </div>
-      <div class="row">
+      <div class="panel-bar">
+        <button type="button" class="panel-toggle">
+          <span class="chevron">▸</span>
+          <span>Route</span>
+        </button>
         <button id="play-btn" type="button">▶ Play</button>
         <input id="scrub" type="range" min="0" max="1000" value="0" />
       </div>
-      <div id="route-status"></div>
-      <div id="flight-hud"></div>
     </form>
-    <div id="recap">
+    <div id="recap" class="panel">
+      <button type="button" class="panel-toggle">
+        <span class="chevron">▸</span>
+        <span>Flight recap</span>
+      </button>
       <div class="sun-viz">
         <svg viewBox="-100 -100 200 200" width="240" height="240">
           <!-- Commercial jet outline (top-down, facing up):
@@ -299,10 +349,12 @@
           </g>
         </svg>
       </div>
-      <div class="title"></div>
-      <table></table>
-      <div class="stats-title"></div>
-      <table class="stats"></table>
+      <div class="panel-body">
+        <div class="title"></div>
+        <table></table>
+        <div class="stats-title"></div>
+        <table class="stats"></table>
+      </div>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

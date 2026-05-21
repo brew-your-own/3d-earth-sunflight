@@ -40,16 +40,18 @@ does on the few tests I ran. I built it to scratch an itch — it is only a fun 
   during playback
 - Timezone + UTC offset shown next to each datetime input; arrival time can be
   entered as a datetime or as a duration (toggle)
-- Preset routes panel and shareable URL parameters (`?from=&to=&via=`)
+- Preset routes and shareable URL parameters (`?from=&to=&via=`)
 - Day/night contrast slider for daylight intensity; `C` toggles clouds,
   `N` toggles night shading, `L` toggles live NASA GIBS satellite imagery,
   `G` centers the camera on your geolocation (Barcelona fallback)
+- Three collapsible UI panels (settings, route, recap) — they auto-collapse on
+  small screens, so the app stays usable on a phone as well as a desktop
 
 ## Run it locally
 
 ```bash
 npm install
-npm run dev      # http://localhost:5173
+npm run dev      # http://localhost:5173 — also served on the LAN for phone testing
 ```
 
 ## Build

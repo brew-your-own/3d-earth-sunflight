@@ -19,6 +19,11 @@ export default defineConfig(({ mode }) => {
     define: {
       __GIT_REV__: JSON.stringify(gitRev()),
     },
+    server: {
+      // Allow reaching the dev server from the LAN via the laptop's mDNS
+      // hostname (e.g. hal.home.arpa) — used for testing on a phone.
+      allowedHosts: ['.home.arpa'],
+    },
     build: single
       ? {
           // Inline every asset, no matter how large.

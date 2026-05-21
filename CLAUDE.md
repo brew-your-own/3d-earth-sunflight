@@ -9,7 +9,7 @@ An interactive 3D Earth visualizer in the browser. Draws great-circle flight rou
 ## Commands
 
 ```bash
-npm run dev      # Vite dev server at http://localhost:5173 (hot reload)
+npm run dev      # Vite dev server at :5173 (hot reload); binds --host for LAN/phone testing
 npm run build    # type-check + chunked production build → dist/ (separate hashed assets, suitable for web hosting)
 npm run package  # type-check + single-file build → dist/index.html (one ~5 MB self-contained file, double-clickable)
 npm run preview  # serve the dist/ build locally
@@ -21,7 +21,7 @@ node scripts/build-airports.mjs
 
 ## Stack
 
-- **Vite 6** — bundler/dev server (no config file)
+- **Vite 6** — bundler/dev server; config in `vite.config.ts` (build modes, `__GIT_REV__` define, dev `server.allowedHosts` for `*.home.arpa`)
 - **Three.js 0.175** with `@types/three`
 - **luxon** — IANA timezone math for local↔UTC conversion at runtime
 - **tz-lookup** (dev only) — lat/lon → IANA tz at build time
@@ -40,8 +40,8 @@ Single-file scene, organized top-to-bottom roughly in lifecycle order:
 7. **Airports + routing** — fetched from `/airports.json`; `setRoute(from, to)` swaps the visible great circle
 8. **Subsolar point** — NOAA-derived (mean longitude + ecliptic correction + GMST); ~0.01° accuracy
 9. **Flight state + playback** — `setFlight(from, to, depLocal, arrLocal)`; cached slerp params, plane mesh, `progress ∈ [0, 1]`
-10. **Recap table** — offline 2000-sample scan that records DAY/TWILIGHT/NIGHT transitions and LEFT/RIGHT sun-side changes (during DAY); rendered bottom-right with timestamps in the departure airport's IANA TZ
-11. **Form wiring, HUD, contrast slider, keyboard toggles**
+10. **Recap table** — offline 2000-sample scan that records DAY/TWILIGHT/NIGHT transitions and LEFT/RIGHT sun-side changes (during DAY); rendered in the top-right recap panel with timestamps in the departure airport's IANA TZ
+11. **Form wiring, HUD, contrast slider, keyboard toggles, collapsible-panel wiring**
 12. **Animation loop** — flight playback when a flight is loaded, idle slow spin otherwise
 
 ## Key conventions
@@ -52,6 +52,7 @@ Single-file scene, organized top-to-bottom roughly in lifecycle order:
 - **Color spaces matter**: textures used for color (`map`, `emissiveMap`, sky) need `colorSpace = SRGBColorSpace`; data textures (`normalMap`, `alphaMap`) stay linear (the loader helpers enforce this).
 - **`OrbitControls` requires `controls.update()` each frame** when `enableDamping = true`.
 - **Day/twilight/night thresholds**: solar elevation ≥ 0° = DAY, (-6°, 0°) = TWILIGHT (civil), < -6° = NIGHT.
+- **Three collapsible UI panels** — settings (top-left), route (bottom-left, with presets merged in), recap (top-right). Layout/CSS lives in `index.html`: each is a `.panel` whose body hides under a `.collapsed` class, toggled by one `.panel-toggle` button. The wiring in `main.ts` is tiny — click toggles `.collapsed`; on viewports < 760px panels start collapsed and opening one collapses the others. Same markup at every screen size (no separate mobile codepath); widths use `min(…, 100vw - 24px)` to cap on a phone.
 
 ## Data files
 
