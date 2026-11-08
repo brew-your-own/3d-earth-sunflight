@@ -8,6 +8,7 @@ import { SEAT_LETTERS } from './seat';
 import { createWindowView } from './window-view';
 import { TERMINATOR_LAYER, createTerminatorOverlay, legendHtml } from './terminator';
 import { moonVecER, topocentricMoonDir } from './moon';
+import { ATMOSPHERE_LAYER, buildOceanRoughness, createAtmosphere, createRouteLineMaterial, makeRouteLine, patchNightLights } from './globe-visuals';
 import { arrIsoToDurationMin, durationToArrIso, formatDuration, formatTzInfo, parseDuration } from './time';
 
 // Assets are imported (not fetched) so the bundler can decide per build
@@ -134,8 +135,8 @@ const loader = new THREE.TextureLoader();
 const maxAniso = renderer.capabilities.getMaxAnisotropy();
 
 // Color textures need sRGB; data textures (normal, alpha) stay linear.
-function loadColor(path: string) {
-  const t = loader.load(path);
+function loadColor(path: string, onLoad?: (t: THREE.Texture) => void) {
+  const t = loader.load(path, onLoad);
   t.colorSpace = THREE.SRGBColorSpace;
   t.anisotropy = maxAniso;
   return t;
@@ -146,7 +147,12 @@ function loadData(path: string) {
   return t;
 }
 
-const dayMap     = loadColor(dayMapUrl);
+// Once the day map is decoded, derive the ocean-glint roughness map from it.
+const dayMap     = loadColor(dayMapUrl, (t) => {
+  earthMat0.roughnessMap = buildOceanRoughness(t.image as HTMLImageElement);
+  earthMat0.roughness = 1;   // roughnessMap values are used as-is
+  earthMat0.needsUpdate = true;
+});
 const nightMap   = loadColor(nightMapUrl);
 const normalMap  = loadData(normalMapUrl);
 const cloudsMap  = loadData(cloudsMapUrl);   // used as alpha
@@ -184,6 +190,8 @@ const earth = new THREE.Mesh(
 // Real axial tilt (~23.4°) so the north pole leans toward +Y.
 earth.rotation.z = THREE.MathUtils.degToRad(23.4);
 scene.add(earth);
+const earthMat0 = earth.material as THREE.MeshStandardMaterial;
+patchNightLights(earthMat0);
 
 // ─── Clouds (slightly larger transparent sphere) ─────────────────────────────
 
@@ -209,6 +217,14 @@ scene.add(clouds);
 // light each rendered frame (see animate), so it always matches the shading.
 const terminator = createTerminatorOverlay({ earth, earthRadius: EARTH_RADIUS });
 camera.layers.enable(TERMINATOR_LAYER);
+
+// ─── Atmosphere rim (main view only, own layer — see globe-visuals.ts) ───────
+const atmosphere = createAtmosphere(EARTH_RADIUS);
+scene.add(atmosphere.mesh);
+camera.layers.enable(ATMOSPHERE_LAYER);
+
+// Shared screen-space route line material (Line2); resolution follows resize.
+const routeLineMat = createRouteLineMaterial();
 let twilightOn = true;
 const twilightLegend = document.getElementById('twilight-legend');
 if (twilightLegend) twilightLegend.innerHTML = legendHtml();
@@ -224,12 +240,9 @@ const PATH_LIFT = 1.02;
 function createGreatCircleLine(
   lat1: number, lon1: number,
   lat2: number, lon2: number,
-  color = 0xffaa33
-): THREE.Line {
+): THREE.Object3D {
   const points = greatCirclePoints(lat1, lon1, lat2, lon2, EARTH_RADIUS * PATH_LIFT);
-  const geometry = new THREE.BufferGeometry().setFromPoints(points);
-  const material = new THREE.LineBasicMaterial({ color, toneMapped: false });
-  return new THREE.Line(geometry, material);
+  return makeRouteLine(points, routeLineMat);
 }
 
 // Canvas-rendered label sprite for a 3-letter IATA code. Pill-shaped background
@@ -285,7 +298,8 @@ function clearRoute() {
   currentRoute.traverse((obj) => {
     if (obj instanceof THREE.Mesh || obj instanceof THREE.Line) {
       obj.geometry.dispose();
-      (obj.material as THREE.Material).dispose();
+      // Route lines share one material for the app's lifetime (Line2 is a Mesh).
+      if (obj.material !== routeLineMat) (obj.material as THREE.Material).dispose();
     } else if (obj instanceof THREE.Sprite) {
       const mat = obj.material as THREE.SpriteMaterial;
       mat.map?.dispose();
@@ -1117,6 +1131,7 @@ if (window.innerWidth < PANEL_NARROW_PX) {
 // ─── Resize & pixel density ──────────────────────────────────────────────────
 
 function applyRendererSize() {
+  routeLineMat.resolution.set(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
@@ -1189,6 +1204,7 @@ function animate() {
   if (!dirty) return;
 
   terminator.setSunPosition(sun.position);
+  atmosphere.setSunPosition(sun.position);
   renderer.render(scene, camera);
   if (renderWindowView()) needsRender = true;
 }

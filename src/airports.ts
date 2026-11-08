@@ -66,3 +66,28 @@ export function resolveAirportCode(value: string): string {
   if (v.length === 3 && airports[upper]) return upper;
   return searchAirports(v)[0]?.code ?? '';
 }
+
+// Nearest airport with scheduled service (rank ≥ 5: medium/large) to a point,
+// by great-circle angle. Used for "plane-local" time: its IANA tz stands in
+// for the timezone the plane is over (over open ocean that's the nearest
+// island/coast, which is what a passenger's phone would roughly show).
+type NearEntry = { code: string; ap: Airport; x: number; y: number; z: number };
+let nearIndex: NearEntry[] | null = null;
+const unit = (lat: number, lon: number) => {
+  const la = lat * Math.PI / 180, lo = lon * Math.PI / 180;
+  return { x: Math.cos(la) * Math.cos(lo), y: Math.cos(la) * Math.sin(lo), z: Math.sin(la) };
+};
+export function nearestAirport(lat: number, lon: number): Suggestion {
+  if (!nearIndex) {
+    nearIndex = Object.entries(airports)
+      .filter(([, ap]) => (ap.rank ?? 0) >= 5 && ap.tz)
+      .map(([code, ap]) => ({ code, ap, ...unit(ap.lat, ap.lon) }));
+  }
+  const p = unit(lat, lon);
+  let best = nearIndex[0], bestDot = -2;
+  for (const e of nearIndex) {
+    const d = e.x * p.x + e.y * p.y + e.z * p.z;
+    if (d > bestDot) { bestDot = d; best = e; }
+  }
+  return { code: best.code, ap: best.ap };
+}

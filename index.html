@@ -166,7 +166,7 @@
       #route-form button:disabled { opacity: 0.45; cursor: not-allowed; }
       .tz-info { color: #9ab; font-size: 11px; }
       .seg-toggle { display: inline-flex; border: 1px solid #555; border-radius: 4px; overflow: hidden; }
-      #route-form .seg-toggle button {
+      #route-form .seg-toggle button, #recap .seg-toggle button {
         padding: 3px 8px;
         background: #1a1a1a;
         color: #aaa;
@@ -175,8 +175,11 @@
         font: inherit;
         font-size: 11px;
       }
-      #route-form .seg-toggle button.active { background: #2c4a6e; color: #fff; }
-      #route-form .seg-toggle button:hover:not(.active) { background: #262626; }
+      #recap .seg-toggle button { cursor: pointer; }
+      #recap .tz-toggle { margin-bottom: 8px; color: #9ab; font-size: 11px; display: flex; gap: 6px; align-items: center; }
+      #recap .tz-toggle:empty { display: none; }
+      #route-form .seg-toggle button.active, #recap .seg-toggle button.active { background: #2c4a6e; color: #fff; }
+      #route-form .seg-toggle button:hover:not(.active), #recap .seg-toggle button:hover:not(.active) { background: #262626; }
       #arr-duration { width: 80px; }
       #via-list { display: flex; flex-direction: column; gap: 4px; }
       .via-item { display: flex; gap: 4px; align-items: center; }
@@ -416,6 +419,7 @@
         </svg>
       </div>
       <div class="panel-body">
+        <div class="tz-toggle"></div>
         <div class="advice"></div>
         <div class="title"></div>
         <table></table>

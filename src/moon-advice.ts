@@ -1,12 +1,12 @@
 // Seat-advice lines for the Moon (HTML rows for the recap panel's advice
 // block). Kept separate from recap-panel.ts so it plugs in with one call.
-import { DateTime } from 'luxon';
 import type { Flight, Side } from './flight';
 import { moonEmoji, moonSummary } from './moon';
 
 export type AdviceFormat = {
   sideHtml: (side: Side) => string;        // e.g. "<b>left (A)</b>"
   viewText: (relAzDeg: number) => string;  // e.g. "forward", "abeam"
+  time: (utcMs: number) => string;         // e.g. "Tue 23:40" in the recap's chosen zone
 };
 
 export function moonAdviceLines(f: Flight, fmt: AdviceFormat): string[] {
@@ -27,7 +27,7 @@ export function moonAdviceLines(f: Flight, fmt: AdviceFormat): string[] {
   const lines = [`<div class="advice-row${m.upHours < 0.05 ? ' muted' : ''}">${head} — ${summary}</div>`];
 
   for (const e of m.events) {
-    const when = DateTime.fromMillis(e.utcMs).setZone(f.from.tz).toFormat('ccc HH:mm');
+    const when = fmt.time(e.utcMs);
     const name = e.kind === 'moonrise' ? 'Moonrise' : 'Moonset';
     lines.push(
       `<div class="advice-row pick" data-t="${e.t}" data-side="${e.side}" title="Jump there and look out that window">` +

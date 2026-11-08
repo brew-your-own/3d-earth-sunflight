@@ -1,12 +1,12 @@
 // Recap panel (top-right): transition table, time breakdown, plane/sun
 // diagram, plus the phase timeline strip under the scrubber. DOM only — the
 // numbers come from flight.ts.
-import { DateTime } from 'luxon';
 import { CLIMB_MIN, CRUISE_ALT_KM, DESCENT_MIN, SUNRISE_ELEV_DEG } from './astro';
 import { type Flight, type RecapRow, type Side, computeRecap } from './flight';
 import { SEAT_LETTERS, type SeatAdvice, type ViewAngle, seatAdvice, viewAngle } from './seat';
 import { type AuroraWindow, auroraWindows } from './aurora';
 import { moonAdviceLines } from './moon-advice';
+import { TIME_REFS, type TimeRef, formatAt, formatRange, refDescription, refLabel } from './time-ref';
 
 const recapEl         = document.getElementById('recap')          as HTMLDivElement;
 const recapTitle      = recapEl.querySelector('.title')           as HTMLDivElement;
@@ -19,6 +19,35 @@ const timelinePhase   = timelineEl.querySelector('.tl-phase')     as HTMLDivElem
 const timelineSide    = timelineEl.querySelector('.tl-side')      as HTMLDivElement;
 
 const adviceEl        = recapEl.querySelector('.advice')          as HTMLDivElement;
+const tzToggle        = recapEl.querySelector('.tz-toggle')       as HTMLDivElement;
+
+// ─── Time reference (dep / arr / UTC / plane-local) ─────────────────────────
+// Remembered per browser; storage can throw (private mode), so guard it.
+const TZ_KEY = 'recap-time-ref';
+let timeRef: TimeRef = 'dep';
+try {
+  const v = localStorage.getItem(TZ_KEY) as TimeRef | null;
+  if (v && TIME_REFS.includes(v)) timeRef = v;
+} catch { /* ignore */ }
+let currentFlight: Flight | null = null;
+let lastHighlightMs = NaN;
+
+tzToggle.addEventListener('click', (e) => {
+  const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-ref]');
+  if (!btn || !currentFlight) return;
+  timeRef = btn.dataset.ref as TimeRef;
+  try { localStorage.setItem(TZ_KEY, timeRef); } catch { /* ignore */ }
+  renderRecap(currentFlight);
+  if (!Number.isNaN(lastHighlightMs)) updateRecapHighlight(lastHighlightMs, false);
+});
+
+function renderTzToggle(f: Flight) {
+  tzToggle.innerHTML = 'Times: <span class="seg-toggle">' + TIME_REFS.map((r) =>
+    `<button type="button" data-ref="${r}" class="${r === timeRef ? 'active' : ''}" title="${refDescription(f, r)}">${refLabel(f, r)}</button>`,
+  ).join('') + '</span>';
+}
+
+const at = (f: Flight, utcMs: number, fmt: string) => formatAt(f, timeRef, utcMs, fmt);
 
 let rowTimes: number[] = [];                 // utcMs per row, ascending
 let rowEls:   HTMLTableRowElement[] = [];
@@ -52,7 +81,7 @@ const sideHtml = (side: Side) =>
 function renderAdvice(f: Flight, a: SeatAdvice) {
   const lines: string[] = [];
   for (const e of a.events) {
-    const when = DateTime.fromMillis(e.utcMs).setZone(f.from.tz).toFormat('ccc HH:mm');
+    const when = at(f, e.utcMs, 'ccc HH:mm');
     const icon = e.kind === 'sunrise' ? '🌅' : '🌇';
     const name = e.kind === 'sunrise' ? 'Sunrise' : 'Sunset';
     lines.push(
@@ -76,7 +105,9 @@ function renderAdvice(f: Flight, a: SeatAdvice) {
   }
   lines.push(...auroraAdviceLines(f, auroraWindows(f)));
   // Moon (see moon-advice.ts): phase, hours up in the dark, rise/set events.
-  lines.push(...moonAdviceLines(f, { sideHtml, viewText: (az) => VIEW_TEXT[viewAngle(az)] }));
+  lines.push(...moonAdviceLines(f, {
+    sideHtml, viewText: (az) => VIEW_TEXT[viewAngle(az)], time: (ms) => at(f, ms, 'ccc HH:mm'),
+  }));
   adviceEl.innerHTML = `<div class="advice-title">Seat advice</div>${lines.join('')}`;
 }
 
@@ -85,21 +116,22 @@ function renderAdvice(f: Flight, a: SeatAdvice) {
 // (closest to the oval) and opens the window facing the aurora. No live Kp
 // data (offline build), hence the hedged wording.
 function auroraAdviceLines(f: Flight, windows: AuroraWindow[]): string[] {
-  const fmt = (ms: number) => DateTime.fromMillis(ms).setZone(f.from.tz).toFormat('HH:mm');
   return windows.map((w) => {
     const chance = w.tier === 'likely' ? 'Aurora likely on a clear night' : 'Aurora possible if activity is moderate';
     return `<div class="advice-row pick" data-t="${w.tPeak}" data-side="${w.side}" ` +
       `title="Jump to the best moment and look out that window">` +
-      `🌌 ${chance} ${fmt(w.startUtcMs)}–${fmt(w.endUtcMs)} · ${sideHtml(w.side)}, ${w.toward}</div>`;
+      `🌌 ${chance} ${formatRange(f, timeRef, w.startUtcMs, w.endUtcMs)} · ${sideHtml(w.side)}, ${w.toward}</div>`;
   });
 }
 
 export function renderRecap(f: Flight) {
   const { rows, stats } = computeRecap(f);
+  currentFlight = f;
+  renderTzToggle(f);
   renderAdvice(f, seatAdvice(f, rows));
-  recapTitle.textContent = `Phase transitions — times in ${f.from.tz}`;
+  recapTitle.textContent = `Phase transitions — ${refDescription(f, timeRef)}`;
   recapTable.innerHTML = rows.map((r) => {
-    const t = DateTime.fromMillis(r.utcMs).setZone(f.from.tz).toFormat('LLL dd HH:mm');
+    const t = at(f, r.utcMs, 'LLL dd HH:mm');
     const cls = `phase-${r.phase}${r.kind === 'endpoint' ? ' endpoint' : ''}`;
     return `<tr class="${cls}"><td class="time">${t}</td><td class="label">${r.label}</td></tr>`;
   }).join('');
@@ -121,7 +153,8 @@ export function renderRecap(f: Flight) {
 }
 
 // Highlight the last row whose timestamp is ≤ utcMs (the segment we're inside).
-export function updateRecapHighlight(utcMs: number) {
+export function updateRecapHighlight(utcMs: number, scroll = true) {
+  lastHighlightMs = utcMs;
   if (rowEls.length === 0) return;
   let idx = -1;
   for (let i = 0; i < rowTimes.length; i++) {
@@ -131,7 +164,7 @@ export function updateRecapHighlight(utcMs: number) {
   if (currentRowIdx >= 0) rowEls[currentRowIdx].classList.remove('current');
   if (idx >= 0) {
     rowEls[idx].classList.add('current');
-    rowEls[idx].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    if (scroll) rowEls[idx].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }
   currentRowIdx = idx;
 }
@@ -140,6 +173,9 @@ export function hideRecap() {
   hideTimeline();
   recapEl.classList.remove('visible');
   adviceEl.innerHTML = '';
+  tzToggle.innerHTML = '';
+  currentFlight = null;
+  lastHighlightMs = NaN;
   recapTable.innerHTML = '';
   recapTitle.textContent = '';
   recapStatsTable.innerHTML = '';
