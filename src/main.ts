@@ -2,8 +2,10 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { type Airport, type Suggestion, airports, resolveAirportCode, searchAirports } from './airports';
 import { greatCirclePoints, latLonToVec3, vec3ToLatLon } from './geo';
-import { type Flight, buildFlight, flightSampleAt } from './flight';
-import { hideRecap, renderRecap, updateRecapHighlight, updateSunViz } from './recap-panel';
+import { type Flight, type FlightSample, type Side, buildFlight, flightSampleAt } from './flight';
+import { hideRecap, onAdvicePick, renderRecap, updateRecapHighlight, updateSunViz } from './recap-panel';
+import { SEAT_LETTERS } from './seat';
+import { createWindowView } from './window-view';
 import { arrIsoToDurationMin, durationToArrIso, formatDuration, formatTzInfo, parseDuration } from './time';
 
 // Assets are imported (not fetched) so the bundler can decide per build
@@ -152,7 +154,9 @@ const starsMap   = loadColor(starsMapUrl);
 
 const stars = new THREE.Mesh(
   new THREE.SphereGeometry(500, 64, 64),
-  new THREE.MeshBasicMaterial({ map: starsMap, side: THREE.BackSide })
+  // fog: false — the window view turns scene fog on, and the stars sit far
+  // beyond its range; they should fade by sky brightness, not by distance.
+  new THREE.MeshBasicMaterial({ map: starsMap, side: THREE.BackSide, fog: false })
 );
 scene.add(stars);
 
@@ -196,6 +200,11 @@ const clouds = new THREE.Mesh(
 );
 clouds.rotation.z = THREE.MathUtils.degToRad(23.4);
 scene.add(clouds);
+
+const windowView = createWindowView({
+  renderer, scene, earth, clouds,
+  earthRadius: EARTH_RADIUS, cloudRadiusFactor: 1.01,
+});
 
 // Lift the line slightly above the cloud layer (1.01) so it's always visible.
 const PATH_LIFT = 1.02;
@@ -351,6 +360,7 @@ function ensurePlane(): THREE.Mesh {
 
 function clearFlight() {
   flight = null;
+  currentSample = null;
   lastFrameT = NaN;
   progress = 0;
   playing = false;
@@ -419,6 +429,7 @@ function sideLabel(rightDot: number, forwardDot: number): string {
 const sunLocalNow = new THREE.Vector3(1, 0, 0);
 const earthWorldQ = new THREE.Quaternion();
 let lastFrameT = NaN;   // NaN → force a redraw on the next call
+let currentSample: FlightSample | null = null;   // sample for the frame on screen
 
 function aimSunLight() {
   earth.getWorldQuaternion(earthWorldQ);
@@ -432,6 +443,7 @@ function updateFlightFrame(t: number) {
   lastFrameT = t;
 
   const s = flightSampleAt(flight, t);
+  currentSample = s;
   sunLocalNow.copy(s.sunLocal);
   aimSunLight();
 
@@ -841,6 +853,7 @@ const earthMat = earth.material as THREE.MeshStandardMaterial;
 let cloudsOn = true;
 let nightOn  = true;
 let liveOn   = false;
+let windowSide: Side | null = null;   // window-seat view: null = off
 let liveLoading = false;  // a GIBS request is in flight; ignore repeat presses
 let liveDateLabel = '';  // YYYY-MM-DD currently displayed when live is on
 
@@ -857,6 +870,7 @@ function refreshHud() {
     `<span class="hud-cmd" data-key="n">[N] night lights: <b>${nightOn ? 'on' : 'off'}</b></span><br>` +
     `<span class="hud-cmd" data-key="l">[L] live satellite: <b>${liveLoading ? 'loading…' : liveOn ? `on (${liveDateLabel})` : 'off'}</b></span><br>` +
     `<span class="hud-cmd" data-key="m">[M] control mode: <b>${controlMode}</b></span><br>` +
+    `<span class="hud-cmd" data-key="w">[W] window view: <b>${windowSide ? windowSide.toLowerCase() : 'off'}</b></span><br>` +
     `<span class="hud-cmd" data-key=" ">[Space] play/pause</span><br>` +
     `<span class="hud-cmd" data-key="g">[G] center on your location (Barcelona fallback)</span>`;
 }
@@ -992,6 +1006,8 @@ const hudActions: Record<string, () => void> = {
   l: () => { setLive(!liveOn); },
   g: () => { goToUserLocation(); },
   m: () => { controlMode = (controlMode === 'orbit') ? 'globe' : 'orbit'; applyControlMode(); refreshHud(); },
+  // off → left → right → off
+  w: () => { setWindowSide(windowSide === null ? 'LEFT' : windowSide === 'LEFT' ? 'RIGHT' : null); },
   ' ': () => { playBtn.click(); },
 };
 
@@ -1016,6 +1032,41 @@ hud.addEventListener('click', (e) => {
   if (!el) return;
   const action = hudActions[el.dataset.key!];
   if (action) action();
+});
+
+// ─── Window-seat view wiring ─────────────────────────────────────────────────
+// The overlay element defines where the inset goes (CSS layout) and draws
+// the cabin-wall frame; window-view.ts renders the 3D view into its rect.
+
+const windowEl    = document.getElementById('window-view') as HTMLDivElement;
+const windowLabel = windowEl.querySelector('.window-label') as HTMLDivElement;
+
+function setWindowSide(side: Side | null) {
+  windowSide = side;
+  if (side) windowLabel.textContent = `${side.toLowerCase()} window (${SEAT_LETTERS[side]}) · [W]`;
+  refreshHud();
+}
+
+function renderWindowView() {
+  const show = windowSide !== null && flight !== null && currentSample !== null;
+  windowEl.classList.toggle('visible', show);
+  if (!show) return;
+  const rect = windowEl.getBoundingClientRect();
+  if (rect.width < 1 || rect.height < 1) return;
+  windowView.render(currentSample!, windowSide!, rect, [currentRoute, planeMesh]);
+}
+
+// Seat advice click: jump to that sunrise/sunset (paused) and look out the
+// window the sun is on. The shade line passes t = null: just switch window.
+onAdvicePick((t, side) => {
+  if (!flight) return;
+  if (t !== null) {
+    progress = t;
+    playing = false;
+    updatePlayBtn();
+    scrubEl.value = String(Math.round(progress * 1000));
+  }
+  setWindowSide(side);
 });
 
 // ─── Collapsible panels ──────────────────────────────────────────────────────
@@ -1078,6 +1129,7 @@ function animate() {
 
   controls.update();
   renderer.render(scene, camera);
+  renderWindowView();
 }
 
 animate();

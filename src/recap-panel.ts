@@ -3,7 +3,8 @@
 // numbers come from flight.ts.
 import { DateTime } from 'luxon';
 import { CRUISE_ALT_KM, NIGHT_ELEV_DEG, SUNRISE_ELEV_DEG } from './astro';
-import { type Flight, type RecapRow, computeRecap } from './flight';
+import { type Flight, type RecapRow, type Side, computeRecap } from './flight';
+import { SEAT_LETTERS, type SeatAdvice, type ViewAngle, seatAdvice } from './seat';
 
 const recapEl         = document.getElementById('recap')          as HTMLDivElement;
 const recapTitle      = recapEl.querySelector('.title')           as HTMLDivElement;
@@ -15,12 +16,68 @@ const timelineEl      = document.getElementById('timeline')       as HTMLDivElem
 const timelinePhase   = timelineEl.querySelector('.tl-phase')     as HTMLDivElement;
 const timelineSide    = timelineEl.querySelector('.tl-side')      as HTMLDivElement;
 
+const adviceEl        = recapEl.querySelector('.advice')          as HTMLDivElement;
+
 let rowTimes: number[] = [];                 // utcMs per row, ascending
 let rowEls:   HTMLTableRowElement[] = [];
 let currentRowIdx = -1;
 
+// ─── Seat advice ─────────────────────────────────────────────────────────────
+// Clicking a sunrise/sunset line asks main.ts to jump there and open that
+// side's window view; clicking the shade line just opens that window.
+
+type AdvicePick = (t: number | null, side: Side) => void;
+let onPick: AdvicePick = () => {};
+export function onAdvicePick(cb: AdvicePick) { onPick = cb; }
+
+adviceEl.addEventListener('click', (e) => {
+  const el = (e.target as HTMLElement).closest<HTMLElement>('[data-side]');
+  if (!el) return;
+  onPick(el.dataset.t ? Number(el.dataset.t) : null, el.dataset.side as Side);
+});
+
+const VIEW_TEXT: Record<ViewAngle, string> = {
+  ahead:   'low ahead — oblique',
+  forward: 'forward',
+  abeam:   'abeam',
+  aft:     'aft',
+  behind:  'behind — oblique',
+};
+
+const sideHtml = (side: Side) =>
+  `<b class="side-${side}">${side === 'LEFT' ? 'left' : 'right'} (${SEAT_LETTERS[side]})</b>`;
+
+function renderAdvice(f: Flight, a: SeatAdvice) {
+  const lines: string[] = [];
+  for (const e of a.events) {
+    const when = DateTime.fromMillis(e.utcMs).setZone(f.from.tz).toFormat('ccc HH:mm');
+    const icon = e.kind === 'sunrise' ? '🌅' : '🌇';
+    const name = e.kind === 'sunrise' ? 'Sunrise' : 'Sunset';
+    lines.push(
+      `<div class="advice-row pick" data-t="${e.t}" data-side="${e.side}" title="Jump there and look out that window">` +
+      `${icon} ${name} ${when} · ${sideHtml(e.side)}, ${VIEW_TEXT[e.view]}</div>`);
+  }
+  if (a.events.length === 0) lines.push(`<div class="advice-row muted">No sunrise or sunset en route</div>`);
+
+  const h = (x: number) => x < 1 ? `${Math.round(x * 60)} min` : `${x.toFixed(1)} h`;
+  const { LEFT: l, RIGHT: r } = a.sunHours;
+  if (a.shadeSide) {
+    const sunny: Side = a.shadeSide === 'LEFT' ? 'RIGHT' : 'LEFT';
+    lines.push(
+      `<div class="advice-row pick" data-side="${a.shadeSide}" title="Look out that window">` +
+      `😎 Shade: ${sideHtml(a.shadeSide)} — sun on the ${sunny.toLowerCase()} ${h(a.sunHours[sunny])}` +
+      `${a.sunHours[a.shadeSide] > 0 ? `, ${h(a.sunHours[a.shadeSide])} on yours` : ''}</div>`);
+  } else if (l + r >= 1 / 6) {
+    lines.push(`<div class="advice-row muted">😎 Sun on both sides about equally (${h(l)} / ${h(r)})</div>`);
+  } else {
+    lines.push(`<div class="advice-row muted">😎 Little direct sun through either side</div>`);
+  }
+  adviceEl.innerHTML = `<div class="advice-title">Seat advice</div>${lines.join('')}`;
+}
+
 export function renderRecap(f: Flight) {
   const { rows, stats } = computeRecap(f);
+  renderAdvice(f, seatAdvice(f, rows));
   recapTitle.textContent = `Phase transitions — times in ${f.from.tz}`;
   recapTable.innerHTML = rows.map((r) => {
     const t = DateTime.fromMillis(r.utcMs).setZone(f.from.tz).toFormat('LLL dd HH:mm');
@@ -62,6 +119,7 @@ export function updateRecapHighlight(utcMs: number) {
 export function hideRecap() {
   hideTimeline();
   recapEl.classList.remove('visible');
+  adviceEl.innerHTML = '';
   recapTable.innerHTML = '';
   recapTitle.textContent = '';
   recapStatsTable.innerHTML = '';

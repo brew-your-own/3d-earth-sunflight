@@ -248,6 +248,51 @@
       }
       #recap #sun-icon { transition: opacity 0.25s; }
       #recap #sun-icon.hidden { opacity: 0; }
+
+      /* Seat advice (top of the recap panel). */
+      #recap .advice { margin-bottom: 10px; }
+      #recap .advice:empty { display: none; }
+      #recap .advice-title { color: #cfe; margin-bottom: 4px; }
+      #recap .advice-row { padding: 1px 4px; border-radius: 3px; color: #ddd; }
+      #recap .advice-row.pick { cursor: pointer; }
+      #recap .advice-row.pick:hover { background: #2c4a6e; color: #fff; }
+      #recap .advice-row.muted { color: #8a9aa8; }
+
+      /* ─── Window-seat view (bottom-right) ────────────────────────────── */
+      #window-view {
+        position: fixed;
+        right: 12px;
+        bottom: 12px;
+        width: min(260px, 40vw);
+        aspect-ratio: 4 / 5;
+        border-radius: 14px;
+        overflow: hidden;          /* clips the glass's wall-coloured shadow */
+        pointer-events: none;      /* drags pass through to the canvas */
+        z-index: 4;
+        display: none;
+      }
+      #window-view.visible { display: block; }
+      /* The glass is a transparent rounded hole; its outward box-shadow
+         (which follows border-radius) paints the cabin wall around it. */
+      #window-view .window-glass {
+        position: absolute;
+        inset: 16px 16px 30px;
+        border-radius: 42% / 34%;
+        box-shadow:
+          0 0 0 200px #d9d3c5,
+          0 0 0 4px #bdb6a6,
+          inset 0 0 18px rgba(0, 0, 0, 0.55);
+      }
+      #window-view .window-label {
+        position: absolute;
+        left: 0; right: 0; bottom: 7px;
+        text-align: center;
+        font: 11px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+        color: #4a4438;
+      }
+      @media (max-width: 759px) {
+        #window-view { bottom: 64px; }   /* clear the route bar on a phone */
+      }
     </style>
   </head>
   <body>
@@ -366,11 +411,19 @@
         </svg>
       </div>
       <div class="panel-body">
+        <div class="advice"></div>
         <div class="title"></div>
         <table></table>
         <div class="stats-title"></div>
         <table class="stats"></table>
       </div>
+    </div>
+    <!-- Window-seat view: the 3D view itself is drawn by main.ts into this
+         box's screen rect (scissored second camera); this markup is only the
+         cabin-wall frame on top of it. -->
+    <div id="window-view" aria-hidden="true">
+      <div class="window-glass"></div>
+      <div class="window-label"></div>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

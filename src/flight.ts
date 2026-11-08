@@ -129,8 +129,19 @@ export type RecapRow = {
 };
 export type RecapStats = { rightPct: number; leftPct: number; twilightPct: number; nightPct: number };
 
-// Scan the flight at fine resolution and collect phase / side transitions.
-// N = 2000 → ~25 s resolution for a 14 h flight, fine for visualization.
+// Bisect between tA (where `same` holds) and tB (where it doesn't) and return
+// the sample just after the change. 16 halvings of one scan step (~25 s on a
+// 14 h flight) pin transitions to well under a second.
+function refineTransition(f: Flight, tA: number, tB: number, same: (s: FlightSample) => boolean): FlightSample {
+  for (let i = 0; i < 16; i++) {
+    const mid = (tA + tB) / 2;
+    if (same(flightSampleAt(f, mid))) tA = mid; else tB = mid;
+  }
+  return flightSampleAt(f, tB);
+}
+
+// Scan the flight at fine resolution and collect phase / side transitions;
+// each detected change is then refined by bisection for an exact timestamp.
 export function computeRecap(f: Flight, N = 2000): { rows: RecapRow[]; stats: RecapStats } {
   const rows: RecapRow[] = [];
   let right = 0, left = 0, twilight = 0, night = 0;
@@ -153,11 +164,16 @@ export function computeRecap(f: Flight, N = 2000): { rows: RecapRow[]; stats: Re
   for (let i = 1; i <= N; i++) {
     const s = flightSampleAt(f, i / N);
     tally(s);
+    const tA = (i - 1) / N, tB = i / N;
     if (s.phase !== prevPhase) {
-      const extra = s.phase === 'DAY' ? `, sun on the ${s.side}` : '';
-      rows.push({ utcMs: s.utcMs, phase: s.phase, kind: 'phase', side: s.side, label: `→ ${s.phase}${extra}` });
+      const pp = prevPhase;
+      const r = refineTransition(f, tA, tB, (x) => x.phase === pp);
+      const extra = s.phase === 'DAY' ? `, sun on the ${r.side}` : '';
+      rows.push({ utcMs: r.utcMs, phase: s.phase, kind: 'phase', side: r.side, label: `→ ${s.phase}${extra}` });
     } else if (s.phase === 'DAY' && s.side !== prevSide) {
-      rows.push({ utcMs: s.utcMs, phase: 'DAY', kind: 'side', side: s.side, label: `Sun → ${s.side}` });
+      const ps = prevSide;
+      const r = refineTransition(f, tA, tB, (x) => x.side === ps);
+      rows.push({ utcMs: r.utcMs, phase: 'DAY', kind: 'side', side: s.side, label: `Sun → ${s.side}` });
     }
     prevPhase = s.phase;
     prevSide  = s.side;

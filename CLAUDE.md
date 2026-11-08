@@ -40,11 +40,13 @@ Pure modules (no DOM, no scene state — import freely from tests):
 - `src/astro.ts` — `subsolarPoint` (NOAA-derived, ~0.01°), cruise-altitude thresholds, `daylightLabel`
 - `src/flight.ts` — `buildFlight` (local times → UTC via each airport's tz, segments split by arc length, zero-length legs dropped), `planeAt`, `flightSampleAt` (sun right/forward/up components, elevation, phase, side — the single source of truth for both HUD and recap), `computeRecap` (2000-sample scan → rows + stats)
 - `src/airports.ts` — `Airport` type, the imported `airports` record, `searchAirports` (tiered match + rank tiebreak, lowercased index built lazily), `resolveAirportCode`
+- `src/seat.ts` — `seatAdvice`: sunrise/sunset events (from recap rows) with window side + relative bearing, hours of direct sun per side (DAY and |sR| ≥ 0.25), shade recommendation; `SEAT_LETTERS` (A left, F/K right)
 - `src/time.ts` — `parseDuration`, `formatDuration`, dep+duration ↔ arrival across timezones, `formatTzInfo`
 
 DOM / scene modules:
 
-- `src/recap-panel.ts` — recap table, time breakdown, plane/sun SVG, timeline strip under the scrubber
+- `src/recap-panel.ts` — seat advice (clickable → `onAdvicePick`), recap table, time breakdown, plane/sun SVG, timeline strip under the scrubber
+- `src/window-view.ts` — window-seat camera (`[W]`: off → left → right), rendered into the `#window-view` overlay's rect with scissor after the main render
 - `src/main.ts` — renderer, camera/controls (orbit + globe drag), lights, textures, Earth/clouds/stars, route drawing (`setRoute`), flight state + playback (`setFlight`, `updateFlightFrame`), form/autocomplete/presets/URL wiring, HUD + hotkeys, live satellite, collapsible panels, animation loop
 
 ## Key conventions
@@ -56,6 +58,8 @@ DOM / scene modules:
 - **`OrbitControls` requires `controls.update()` each frame** when `enableDamping = true`.
 - **Day/twilight/night thresholds** are altitude-corrected for an 11 km cruise (`CRUISE_ALT_KM`): horizon dip (~3.36°) + refraction/semidiameter (0.833°) puts apparent sunrise at solar elevation ≈ -4.2° (`SUNRISE_ELEV_DEG`). DAY above that, TWILIGHT for the next 6° (civil), NIGHT below (`NIGHT_ELEV_DEG` ≈ -10.2°). Climb/descent is ignored.
 - **Earth spin must use `rotateY()`** (local axis), never `rotation.y +=` — with the tilt on `rotation.z`, the default XYZ Euler order would spin around world Y and make the pole precess.
+- **Recap transitions are bisected** (`refineTransition`) after the 2000-sample scan, so sunrise/sunset/side-change times are exact to < 1 s.
+- **Window view tricks** (all in `window-view.ts`): the sky dome is on layer 1 (main camera never sees it), `renderOrder = -1` so it draws before the transparent clouds, depth-tested so the Earth occludes it — the horizon dip and the sun sinking behind the curve come from real geometry. `scene.fog` always exists but sits at 1e6 except during the window render (avoids shader recompiles); the starfield has `fog: false`. During the window render the route group and plane cone are hidden (they float at 1.02 R ≈ 127 km) and the cloud shell is shrunk to ~6 km so it's below the plane. The camera "leans" toward the sun up to ±55° from straight-out; a sun closer to the nose/tail is genuinely out of view (advice says "oblique"). The sun disc is drawn ~1.2° radius (4× real) to be visible in the inset.
 - **Timeline strip** under the scrubber is built from the recap rows (`renderTimeline` in `recap-panel.ts`): top band = phase, bottom band = sun side during DAY (blue left / orange right, matching the recap stats).
 - **Three collapsible UI panels** — settings (top-left), route (bottom-left, with presets merged in), recap (top-right). Layout/CSS lives in `index.html`: each is a `.panel` whose body hides under a `.collapsed` class, toggled by one `.panel-toggle` button. The wiring in `main.ts` is tiny — click toggles `.collapsed`; on viewports < 760px panels start collapsed and opening one collapses the others. Same markup at every screen size (no separate mobile codepath); widths use `min(…, 100vw - 24px)` to cap on a phone.
 
