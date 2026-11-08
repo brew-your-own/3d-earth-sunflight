@@ -4,8 +4,9 @@
 import { DateTime } from 'luxon';
 import { CLIMB_MIN, CRUISE_ALT_KM, DESCENT_MIN, SUNRISE_ELEV_DEG } from './astro';
 import { type Flight, type RecapRow, type Side, computeRecap } from './flight';
-import { SEAT_LETTERS, type SeatAdvice, type ViewAngle, seatAdvice } from './seat';
+import { SEAT_LETTERS, type SeatAdvice, type ViewAngle, seatAdvice, viewAngle } from './seat';
 import { type AuroraWindow, auroraWindows } from './aurora';
+import { moonAdviceLines } from './moon-advice';
 
 const recapEl         = document.getElementById('recap')          as HTMLDivElement;
 const recapTitle      = recapEl.querySelector('.title')           as HTMLDivElement;
@@ -74,6 +75,8 @@ function renderAdvice(f: Flight, a: SeatAdvice) {
     lines.push(`<div class="advice-row muted">😎 Little direct sun through either side</div>`);
   }
   lines.push(...auroraAdviceLines(f, auroraWindows(f)));
+  // Moon (see moon-advice.ts): phase, hours up in the dark, rise/set events.
+  lines.push(...moonAdviceLines(f, { sideHtml, viewText: (az) => VIEW_TEXT[viewAngle(az)] }));
   adviceEl.innerHTML = `<div class="advice-title">Seat advice</div>${lines.join('')}`;
 }
 
