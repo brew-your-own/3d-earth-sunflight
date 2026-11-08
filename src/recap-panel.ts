@@ -5,6 +5,7 @@ import { DateTime } from 'luxon';
 import { CLIMB_MIN, CRUISE_ALT_KM, DESCENT_MIN, SUNRISE_ELEV_DEG } from './astro';
 import { type Flight, type RecapRow, type Side, computeRecap } from './flight';
 import { SEAT_LETTERS, type SeatAdvice, type ViewAngle, seatAdvice } from './seat';
+import { type AuroraWindow, auroraWindows } from './aurora';
 
 const recapEl         = document.getElementById('recap')          as HTMLDivElement;
 const recapTitle      = recapEl.querySelector('.title')           as HTMLDivElement;
@@ -72,7 +73,22 @@ function renderAdvice(f: Flight, a: SeatAdvice) {
   } else {
     lines.push(`<div class="advice-row muted">😎 Little direct sun through either side</div>`);
   }
+  lines.push(...auroraAdviceLines(f, auroraWindows(f)));
   adviceEl.innerHTML = `<div class="advice-title">Seat advice</div>${lines.join('')}`;
+}
+
+// ─── Aurora advice lines ─────────────────────────────────────────────────────
+// One clickable line per aurora window; clicking jumps to its best moment
+// (closest to the oval) and opens the window facing the aurora. No live Kp
+// data (offline build), hence the hedged wording.
+function auroraAdviceLines(f: Flight, windows: AuroraWindow[]): string[] {
+  const fmt = (ms: number) => DateTime.fromMillis(ms).setZone(f.from.tz).toFormat('HH:mm');
+  return windows.map((w) => {
+    const chance = w.tier === 'likely' ? 'Aurora likely on a clear night' : 'Aurora possible if activity is moderate';
+    return `<div class="advice-row pick" data-t="${w.tPeak}" data-side="${w.side}" ` +
+      `title="Jump to the best moment and look out that window">` +
+      `🌌 ${chance} ${fmt(w.startUtcMs)}–${fmt(w.endUtcMs)} · ${sideHtml(w.side)}, ${w.toward}</div>`;
+  });
 }
 
 export function renderRecap(f: Flight) {

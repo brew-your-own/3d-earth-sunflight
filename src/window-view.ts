@@ -17,6 +17,7 @@ import * as THREE from 'three';
 
 import { EARTH_RADIUS_KM } from './geo';
 import type { FlightSample, Side } from './flight';
+import { auroraAt } from './aurora';
 
 const SKY_LAYER = 1;
 const LOOK_DOWN_DEG = 10;         // passengers look a little below level
@@ -38,6 +39,10 @@ const SKY_VERTEX = /* glsl */ `
 const SKY_FRAGMENT = /* glsl */ `
   uniform vec3 uSunDir;   // world, unit
   uniform vec3 uUp;       // local vertical at the plane, world, unit
+  // Aurora block uniforms (see aurora.ts)
+  uniform vec3  uAuroraDir;        // world, unit, horizontal toward the aurora
+  uniform float uAuroraStrength;   // 0 = none … 1 = "likely" tier
+  uniform float uTime;             // seconds, drives the slow ray drift
   varying vec3 vWorldPos;
 
   void main() {
@@ -69,7 +74,28 @@ const SKY_FRAGMENT = /* glsl */ `
     float disc = smoothstep(0.99974, 0.99985, cosSun);   // cos 1.3° → cos 1.0°
     col += sunCol * (glow * max(day, tw) + disc * 2.0);
 
+    // ── Aurora block ────────────────────────────────────────────────────────
+    // A wide arc low over the horizon toward uAuroraDir: green (557.7 nm
+    // oxygen) from the horizon up to ~15°, a fainter purple/red fringe above,
+    // broken into slowly drifting vertical rays. Additive, and it adds its own
+    // alpha so it shows over the transparent night sky (stars behind).
+    float auroraA = 0.0;
+    if (uAuroraStrength > 0.0) {
+      vec3 dirHa = normalize(dir - uUp * h + 1e-5);
+      float facing = pow(max(dot(dirHa, uAuroraDir), 0.0), 3.0);      // ~±60° wide
+      float elev = asin(clamp(h, -1.0, 1.0));                          // radians
+      float green  = smoothstep(-0.02, 0.05, elev) * (1.0 - smoothstep(0.08, 0.28, elev));
+      float fringe = smoothstep(0.12, 0.24, elev) * (1.0 - smoothstep(0.24, 0.42, elev));
+      vec3 sideAx = cross(uUp, uAuroraDir);
+      float az = atan(dot(dirHa, sideAx), dot(dirHa, uAuroraDir));
+      float rays = 0.6 + 0.4 * sin(az * 41.0 + uTime * 0.5) * sin(az * 17.0 - uTime * 0.3);
+      float k = facing * rays * uAuroraStrength * 0.55;
+      col += (vec3(0.15, 1.0, 0.45) * green + vec3(0.65, 0.25, 0.9) * fringe * 0.6) * k;
+      auroraA = max(green, fringe * 0.6) * k;
+    }
+
     float alpha = clamp(max(max(day, tw * band * 1.2), disc + glow * max(day, tw)), 0.0, 1.0);
+    alpha = max(alpha, auroraA);   // aurora block
     gl_FragColor = vec4(col, alpha);
   }
 `;
@@ -90,7 +116,11 @@ export function createWindowView(d: WindowViewDeps) {
   const skyMat = new THREE.ShaderMaterial({
     vertexShader: SKY_VERTEX,
     fragmentShader: SKY_FRAGMENT,
-    uniforms: { uSunDir: { value: new THREE.Vector3() }, uUp: { value: new THREE.Vector3() } },
+    uniforms: {
+      uSunDir: { value: new THREE.Vector3() }, uUp: { value: new THREE.Vector3() },
+      // aurora block
+      uAuroraDir: { value: new THREE.Vector3(1, 0, 0) }, uAuroraStrength: { value: 0 }, uTime: { value: 0 },
+    },
     side: THREE.BackSide,
     transparent: true,
     depthWrite: false,
@@ -163,6 +193,15 @@ export function createWindowView(d: WindowViewDeps) {
     skyMat.uniforms.uSunDir.value.copy(sunWorld);
     skyMat.uniforms.uUp.value.copy(up);
 
+    // Aurora: direction + strength from the current sample. While it's on
+    // screen the rays drift, so report "still animating" to keep frames coming.
+    const aurora = auroraAt(s);
+    skyMat.uniforms.uAuroraStrength.value = aurora.strength;
+    if (aurora.strength > 0) {
+      skyMat.uniforms.uAuroraDir.value.copy(aurora.dirLocal).applyQuaternion(q).normalize();
+      skyMat.uniforms.uTime.value = performance.now() / 1000;
+    }
+
     // Haze colour follows the sky near the horizon: pale blue by day, dark at night.
     const day = THREE.MathUtils.smoothstep(sunWorld.dot(up), -0.17, 0.04);
     fog.color.setRGB(0.50 * day + 0.01, 0.66 * day + 0.012, 0.88 * day + 0.02);
@@ -184,7 +223,7 @@ export function createWindowView(d: WindowViewDeps) {
     clouds.scale.setScalar(cloudScaleBefore);
     hidden.forEach((o, i) => { if (o) o.visible = wasVisible[i]; });
     fog.near = NO_FOG.near; fog.far = NO_FOG.far;
-    return !leanSettled;
+    return !leanSettled || aurora.strength > 0;
   }
 
   return { render };
