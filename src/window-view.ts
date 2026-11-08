@@ -13,6 +13,10 @@
 //     below 6 km (climb/descent) it's overhead and back-face culled.
 //   - the camera height follows the sample's climb/cruise/descent altitude.
 //   - the route line, labels and plane cone hidden (they live at 1.02 R).
+//
+// The same camera also does the pilot's view ('COCKPIT'): looking over the
+// nose, a touch below level (the horizon sits ~3.4° down at cruise), with a
+// wider field of view and no leaning.
 import * as THREE from 'three';
 
 import { EARTH_RADIUS_KM } from './geo';
@@ -20,6 +24,11 @@ import type { FlightSample, Side } from './flight';
 import { auroraAt } from './aurora';
 
 const SKY_LAYER = 1;
+// Where the view is from: a cabin window on one side, or the flight deck.
+export type ViewSeat = Side | 'COCKPIT';
+const WINDOW_FOV_DEG  = 60;
+const COCKPIT_FOV_DEG = 70;       // vertical; the cockpit inset is wide (16:9)
+const COCKPIT_PITCH_DEG = -4;     // horizon a little above centre
 const LOOK_DOWN_DEG = 10;         // passengers look a little below level
 const MAX_LEAN_DEG  = 55;         // how far fore/aft of straight-out you can see by leaning
 const LEAN_RATE     = 2.5;        // 1/s — easing toward the sun (≈1 s to settle)
@@ -133,7 +142,7 @@ export type WindowViewDeps = {
 };
 
 export function createWindowView(d: WindowViewDeps) {
-  const camera = new THREE.PerspectiveCamera(60, 4 / 5, 0.0005, 1000);
+  const camera = new THREE.PerspectiveCamera(WINDOW_FOV_DEG, 4 / 5, 0.0005, 1000);
   camera.layers.enable(SKY_LAYER);
 
   const skyMat = new THREE.ShaderMaterial({
@@ -172,16 +181,25 @@ export function createWindowView(d: WindowViewDeps) {
   let leanDeg = 0;
   let pitchDeg = -LOOK_DOWN_DEG;   // view elevation; raised toward a high sun/Moon
   let leanSettled = true;
+  let cockpitYaw = 0;              // cockpit bearing (deg from the nose), eased to 0
   let lastMs = performance.now();
   // Night-time priority: aurora on this side (a broad band low on the horizon)
   // beats the Moon, which beats looking straight out.
   function updateLean(
-    s: FlightSample, side: Side, moonLocal?: THREE.Vector3,
+    s: FlightSample, side: ViewSeat, moonLocal?: THREE.Vector3,
     aurora?: { strength: number; dirLocal: THREE.Vector3 },
   ): number {
     const now = performance.now();
     const dt = Math.min(0.1, (now - lastMs) / 1000);
     lastMs = now;
+    if (side === 'COCKPIT') {
+      // Eyes front: ease back to the nose (e.g. right after leaving a window).
+      const k = 1 - Math.exp(-LEAN_RATE * 2 * dt);
+      cockpitYaw += (0 - cockpitYaw) * k;
+      pitchDeg += (COCKPIT_PITCH_DEG - pitchDeg) * k;
+      leanSettled = Math.abs(cockpitYaw) < 0.05 && Math.abs(COCKPIT_PITCH_DEG - pitchDeg) < 0.05;
+      return cockpitYaw;
+    }
     const abeam = side === 'LEFT' ? -90 : 90;
     let relAz = THREE.MathUtils.radToDeg(Math.atan2(s.sR, s.sF));     // 0 ahead, +90 right
     let targetElev = s.elevDeg;
@@ -216,6 +234,7 @@ export function createWindowView(d: WindowViewDeps) {
     leanDeg  += (target - leanDeg) * k;
     pitchDeg += (targetPitch - pitchDeg) * k;
     leanSettled = Math.abs(target - leanDeg) < 0.05 && Math.abs(targetPitch - pitchDeg) < 0.05;
+    cockpitYaw = abeam + leanDeg;   // so switching to the cockpit turns, not snaps
     return abeam + leanDeg;
   }
 
@@ -223,7 +242,7 @@ export function createWindowView(d: WindowViewDeps) {
   // Returns true while the view is still easing (caller should keep drawing).
   // `moonLocal`: optional topocentric Moon direction (Earth-local, unit).
   function render(
-    s: FlightSample, side: Side, rect: DOMRect, hidden: Array<THREE.Object3D | null>,
+    s: FlightSample, side: ViewSeat, rect: DOMRect, hidden: Array<THREE.Object3D | null>,
     moonLocal?: THREE.Vector3,
   ): boolean {
     const { renderer, scene, earth, clouds, earthRadius } = d;
@@ -247,6 +266,7 @@ export function createWindowView(d: WindowViewDeps) {
       .multiplyScalar(Math.cos(pitch)).addScaledVector(up, Math.sin(pitch)).add(camPos);
     camera.lookAt(look);
     camera.aspect = rect.width / rect.height;
+    camera.fov = side === 'COCKPIT' ? COCKPIT_FOV_DEG : WINDOW_FOV_DEG;
     // Near plane scales with height above ground: at 100 m the ground is
     // ~0.6 km away along the view; at cruise ~60 km. Far stays at 1000 for
     // the stars (nothing out there to z-fight).

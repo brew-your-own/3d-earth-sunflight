@@ -297,6 +297,23 @@
         font: 11px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
         color: #4a4438;
       }
+      /* Cockpit: a wide windscreen with a centre post, dark glareshield wall. */
+      #window-view.cockpit { width: min(640px, 62vw); aspect-ratio: 16 / 9; border-radius: 10px; }
+      #window-view.cockpit .window-glass {
+        inset: 10px 10px 34px;
+        border-radius: 22% 22% 6% 6% / 34% 34% 10% 10%;
+        box-shadow:
+          0 0 0 200px #2b2e33,
+          0 0 0 3px #44484f,
+          inset 0 0 22px rgba(0, 0, 0, 0.5);
+      }
+      #window-view.cockpit .window-glass::after {   /* centre windscreen post */
+        content: '';
+        position: absolute;
+        left: calc(50% - 5px); top: -4px; bottom: -4px; width: 10px;
+        background: #2b2e33;
+      }
+      #window-view.cockpit .window-label { color: #9aa3ad; bottom: 10px; }
       @media (max-width: 759px) {
         #window-view { bottom: 64px; }   /* clear the route bar on a phone */
       }

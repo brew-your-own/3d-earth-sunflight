@@ -5,7 +5,7 @@ import { greatCirclePoints, latLonToVec3, vec3ToLatLon } from './geo';
 import { type Flight, type FlightSample, type Side, buildFlight, flightSampleAt } from './flight';
 import { hideRecap, onAdvicePick, renderRecap, updateRecapHighlight, updateSunViz } from './recap-panel';
 import { SEAT_LETTERS } from './seat';
-import { createWindowView } from './window-view';
+import { type ViewSeat, createWindowView } from './window-view';
 import { TERMINATOR_LAYER, createTerminatorOverlay, legendHtml } from './terminator';
 import { moonVecER, topocentricMoonDir } from './moon';
 import { createPlane } from './plane-model';
@@ -864,7 +864,7 @@ const earthMat = earth.material as THREE.MeshStandardMaterial;
 let cloudsOn = true;
 let nightOn  = true;
 let liveOn   = false;
-let windowSide: Side | null = null;   // window-seat view: null = off
+let windowSide: ViewSeat | null = null;   // window / cockpit view: null = off
 let liveLoading = false;  // a GIBS request is in flight; ignore repeat presses
 let liveDateLabel = '';  // YYYY-MM-DD currently displayed when live is on
 
@@ -1020,7 +1020,8 @@ const hudActions: Record<string, () => void> = {
   g: () => { goToUserLocation(); },
   m: () => { controlMode = (controlMode === 'orbit') ? 'globe' : 'orbit'; applyControlMode(); refreshHud(); },
   // off → left → right → off
-  w: () => { setWindowSide(windowSide === null ? 'LEFT' : windowSide === 'LEFT' ? 'RIGHT' : null); },
+  // off → left window → right window → cockpit → off
+  w: () => { setWindowSide(windowSide === null ? 'LEFT' : windowSide === 'LEFT' ? 'RIGHT' : windowSide === 'RIGHT' ? 'COCKPIT' : null); },
   t: () => {
     twilightOn = !twilightOn;
     terminator.visible = twilightOn;
@@ -1060,9 +1061,12 @@ hud.addEventListener('click', (e) => {
 const windowEl    = document.getElementById('window-view') as HTMLDivElement;
 const windowLabel = windowEl.querySelector('.window-label') as HTMLDivElement;
 
-function setWindowSide(side: Side | null) {
+function setWindowSide(side: ViewSeat | null) {
   windowSide = side;
-  if (side) windowLabel.textContent = `${side.toLowerCase()} window (${SEAT_LETTERS[side]}) · [W]`;
+  windowEl.classList.toggle('cockpit', side === 'COCKPIT');
+  if (side === 'COCKPIT') windowLabel.textContent = 'cockpit · [W]';
+  else if (side) windowLabel.textContent = `${side.toLowerCase()} window (${SEAT_LETTERS[side]}) · [W]`;
+  invalidate();
   refreshHud();
 }
 
