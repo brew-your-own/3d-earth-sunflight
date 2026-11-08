@@ -51,7 +51,9 @@ Single-file scene, organized top-to-bottom roughly in lifecycle order:
 - **Sun positioning during a flight**: subsolar point is computed in Earth's *local* frame, then transformed to world via `earth.getWorldQuaternion(...)`. The directional light goes along that direction × 50.
 - **Color spaces matter**: textures used for color (`map`, `emissiveMap`, sky) need `colorSpace = SRGBColorSpace`; data textures (`normalMap`, `alphaMap`) stay linear (the loader helpers enforce this).
 - **`OrbitControls` requires `controls.update()` each frame** when `enableDamping = true`.
-- **Day/twilight/night thresholds**: solar elevation ≥ 0° = DAY, (-6°, 0°) = TWILIGHT (civil), < -6° = NIGHT.
+- **Day/twilight/night thresholds** are altitude-corrected for an 11 km cruise (`CRUISE_ALT_KM`): horizon dip (~3.36°) + refraction/semidiameter (0.833°) puts apparent sunrise at solar elevation ≈ -4.2° (`SUNRISE_ELEV_DEG`). DAY above that, TWILIGHT for the next 6° (civil), NIGHT below (`NIGHT_ELEV_DEG` ≈ -10.2°). Climb/descent is ignored.
+- **Earth spin must use `rotateY()`** (local axis), never `rotation.y +=` — with the tilt on `rotation.z`, the default XYZ Euler order would spin around world Y and make the pole precess.
+- **Timeline strip** under the scrubber is built from the recap rows (`renderTimeline`): top band = phase, bottom band = sun side during DAY (blue left / orange right, matching the recap stats).
 - **Three collapsible UI panels** — settings (top-left), route (bottom-left, with presets merged in), recap (top-right). Layout/CSS lives in `index.html`: each is a `.panel` whose body hides under a `.collapsed` class, toggled by one `.panel-toggle` button. The wiring in `main.ts` is tiny — click toggles `.collapsed`; on viewports < 760px panels start collapsed and opening one collapses the others. Same markup at every screen size (no separate mobile codepath); widths use `min(…, 100vw - 24px)` to cap on a phone.
 
 ## Data files

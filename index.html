@@ -87,7 +87,14 @@
       #route-form:not(.collapsed) .panel-bar {
         border-top: 1px solid rgba(255, 255, 255, 0.08);
       }
-      #scrub { flex: 1; min-width: 0; accent-color: #66aaff; }
+      .scrub-wrap { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+      #scrub { width: 100%; min-width: 0; margin: 0; accent-color: #66aaff; }
+      /* Phase/sun-side strip under the slider. Inset ~half a thumb width on
+         each side so 0% / 100% line up with the thumb's centre at the ends. */
+      #timeline { display: none; flex-direction: column; gap: 1px; padding: 0 7px; }
+      #timeline.visible { display: flex; }
+      #timeline .tl-phase { height: 5px; border-radius: 2px; }
+      #timeline .tl-side  { height: 3px; border-radius: 2px; }
       #route-form .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
       #route-form .row label { display: flex; gap: 6px; align-items: center; }
       #route-form input[type="text"], #route-form .iata {
@@ -226,6 +233,9 @@
       #recap table.stats td { padding: 1px 8px 1px 0; }
       #recap table.stats td.pct { color: #fff; text-align: right; padding: 1px 0 1px 12px; }
       #recap table.stats td.sun-pct { text-align: center; color: #ffe28a; padding: 2px 0; }
+      #recap .side-LEFT  { color: #4fc3ff; }
+      #recap .side-RIGHT { color: #ff8a3d; }
+      #recap table.stats td.footnote { color: #789; font-size: 10px; padding-top: 6px; }
       #recap .sun-viz { display: flex; justify-content: flex-end; padding: 2px 6px 6px; }
       /* 150px on desktop, ~80px on a 390px-wide iPhone, scaling between. */
       #recap .sun-viz svg { display: block; width: min(150px, 20.5vw); height: auto; }
@@ -295,7 +305,13 @@
           <span>Route</span>
         </button>
         <button id="play-btn" type="button">▶ Play</button>
-        <input id="scrub" type="range" min="0" max="1000" value="0" />
+        <div class="scrub-wrap">
+          <input id="scrub" type="range" min="0" max="1000" value="0" />
+          <div id="timeline" title="Top: day / twilight / night — bottom: sun on the left (blue) or right (orange)">
+            <div class="tl-phase"></div>
+            <div class="tl-side"></div>
+          </div>
+        </div>
       </div>
     </form>
     <div id="recap" class="panel">

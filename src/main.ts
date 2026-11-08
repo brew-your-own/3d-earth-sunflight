@@ -634,11 +634,23 @@ function sideLabel(rightDot: number, forwardDot: number): string {
   return `Sun: ${side}, ${qual}`;
 }
 
-// Civil-twilight-aware day/night label. Elevation is the sun's angle above
-// the local horizon at the plane's position.
+// Sunrise/sunset as seen from the cabin at cruise altitude. Elevation is
+// measured against the geometric (level) horizon, but from 11 km up the
+// visible horizon sits lower:
+//   - horizon dip  acos(R / (R + h))      ≈ 3.36°
+//   - refraction (0.57°) + solar semidiameter (0.27°) — the same 0.833° used
+//     for standard ground-level sunrise (upper limb touching the horizon)
+// So the passenger sees the sun at elevation ≳ -4.2°, not 0°. Civil twilight
+// keeps its 6° depth below that apparent horizon. Altitude is held constant
+// for the whole flight (climb/descent ignored).
+const CRUISE_ALT_KM    = 11;
+const HORIZON_DIP_DEG  = THREE.MathUtils.radToDeg(Math.acos(6371 / (6371 + CRUISE_ALT_KM)));
+const SUNRISE_ELEV_DEG = -(HORIZON_DIP_DEG + 0.833);
+const NIGHT_ELEV_DEG   = SUNRISE_ELEV_DEG - 6;
+
 function daylightLabel(elevDeg: number): string {
-  if (elevDeg >=  0) return 'DAY';
-  if (elevDeg >= -6) return 'TWILIGHT';
+  if (elevDeg >= SUNRISE_ELEV_DEG) return 'DAY';
+  if (elevDeg >= NIGHT_ELEV_DEG)   return 'TWILIGHT';
   return 'NIGHT';
 }
 
@@ -666,7 +678,12 @@ function flightSampleAt(f: Flight, t: number): {
 
 // Scan the flight at fine resolution and collect phase / side transitions.
 // Step count ≈ 2000 → ~25 s resolution for a 14 h flight, fine for visualization.
-type RecapRow = { utcMs: number; phase: string; label: string; endpoint?: boolean };
+type RecapRow = {
+  utcMs: number; phase: string; label: string;
+  kind: 'endpoint' | 'phase' | 'side';
+  side?: 'LEFT' | 'RIGHT';   // sun side at this row (only meaningful during DAY)
+  endpoint?: boolean;
+};
 type RecapStats = { rightPct: number; leftPct: number; twilightPct: number; nightPct: number };
 
 function computeRecap(f: Flight): { rows: RecapRow[]; stats: RecapStats } {
@@ -686,6 +703,7 @@ function computeRecap(f: Flight): { rows: RecapRow[]; stats: RecapStats } {
     utcMs: f.depUtcMs,
     phase: first.phase,
     label: `Depart ${f.fromCode} — ${first.phase}${depExtra}`,
+    kind: 'endpoint', side: first.side,
     endpoint: true,
   });
 
@@ -696,9 +714,9 @@ function computeRecap(f: Flight): { rows: RecapRow[]; stats: RecapStats } {
     tally(s);
     if (s.phase !== prevPhase) {
       const extra = s.phase === 'DAY' ? `, sun on the ${s.side}` : '';
-      rows.push({ utcMs: s.utcMs, phase: s.phase, label: `→ ${s.phase}${extra}` });
+      rows.push({ utcMs: s.utcMs, phase: s.phase, label: `→ ${s.phase}${extra}`, kind: 'phase', side: s.side });
     } else if (s.phase === 'DAY' && s.side !== prevSide) {
-      rows.push({ utcMs: s.utcMs, phase: 'DAY', label: `Sun → ${s.side}` });
+      rows.push({ utcMs: s.utcMs, phase: 'DAY', label: `Sun → ${s.side}`, kind: 'side', side: s.side });
     }
     prevPhase = s.phase;
     prevSide  = s.side;
@@ -708,6 +726,7 @@ function computeRecap(f: Flight): { rows: RecapRow[]; stats: RecapStats } {
     utcMs: f.arrUtcMs,
     phase: prevPhase,
     label: `Arrive ${f.toCode}`,
+    kind: 'endpoint', side: prevSide,
     endpoint: true,
   });
 
@@ -732,11 +751,11 @@ const sunIcon         = document.getElementById('sun-icon')   as SVGGElement | n
 // (-y in SVG), so:
 //   sun ahead (sF > 0, sR = 0) → top of viz
 //   sun right (sR > 0, sF = 0) → right of viz
-// Hidden during NIGHT (elev < -6°).
+// Hidden during NIGHT.
 const SUN_VIZ_RADIUS = 82;
 function updateSunViz(sR: number, sF: number, elevDeg: number) {
   if (!sunIcon) return;
-  if (elevDeg < -6) {
+  if (elevDeg < NIGHT_ELEV_DEG) {
     sunIcon.classList.add('hidden');
     return;
   }
@@ -762,10 +781,13 @@ function renderRecap(f: Flight) {
   recapStatsTitle.textContent = 'Time breakdown';
   const pct = (v: number) => `${v.toFixed(0)}%`;
   recapStatsTable.innerHTML = [
-    `<tr class="phase-DAY"><td colspan="2" class="sun-pct">${pct(stats.leftPct)} ← Sun → ${pct(stats.rightPct)}</td></tr>`,
+    `<tr class="phase-DAY"><td colspan="2" class="sun-pct">` +
+      `<span class="side-LEFT">${pct(stats.leftPct)} ←</span> Sun <span class="side-RIGHT">→ ${pct(stats.rightPct)}</span></td></tr>`,
     `<tr class="phase-TWILIGHT"><td class="label">Twilight</td><td class="pct">${pct(stats.twilightPct)}</td></tr>`,
     `<tr class="phase-NIGHT"><td class="label">Night</td><td class="pct">${pct(stats.nightPct)}</td></tr>`,
+    `<tr><td colspan="2" class="footnote">Sunrise/sunset at ${CRUISE_ALT_KM} km cruise: sun elev ${SUNRISE_ELEV_DEG.toFixed(1)}°</td></tr>`,
   ].join('');
+  renderTimeline(f, rows);
   recapEl.classList.add('visible');
   recapRowTimes = rows.map((r) => r.utcMs);
   recapTrEls    = Array.from(recapTable.querySelectorAll('tr')) as HTMLTableRowElement[];
@@ -788,7 +810,50 @@ function updateRecapHighlight(utcMs: number) {
   currentRowIdx = idx;
 }
 
+// ─── Timeline strip under the scrubber ──────────────────────────────────────
+// Two hard-stop gradient bands, aligned with the scrub slider's track:
+//   top    — DAY / TWILIGHT / NIGHT (same colors as the recap table)
+//   bottom — sun side during DAY (left / right), empty otherwise
+// Built from the recap rows: each row starts a run that lasts until the next.
+
+const timelineEl     = document.getElementById('timeline')       as HTMLDivElement;
+const timelinePhase  = timelineEl.querySelector('.tl-phase')     as HTMLDivElement;
+const timelineSide   = timelineEl.querySelector('.tl-side')      as HTMLDivElement;
+
+const PHASE_COLORS: Record<string, string> = {
+  DAY: '#ffd84d', TWILIGHT: '#9b6bff', NIGHT: '#2f4fa8',
+};
+const SIDE_COLORS = { LEFT: '#4fc3ff', RIGHT: '#ff8a3d' } as const;
+
+function hardStopGradient(runs: Array<{ t0: number; t1: number; color: string }>): string {
+  const stops = runs.flatMap(({ t0, t1, color }) =>
+    [`${color} ${(t0 * 100).toFixed(2)}%`, `${color} ${(t1 * 100).toFixed(2)}%`]);
+  return `linear-gradient(to right, ${stops.join(', ')})`;
+}
+
+function renderTimeline(f: Flight, rows: RecapRow[]) {
+  const tOf = (utcMs: number) => THREE.MathUtils.clamp((utcMs - f.depUtcMs) / f.durationMs, 0, 1);
+  const phaseRuns: Array<{ t0: number; t1: number; color: string }> = [];
+  const sideRuns:  Array<{ t0: number; t1: number; color: string }> = [];
+  for (let i = 0; i < rows.length - 1; i++) {
+    const t0 = tOf(rows[i].utcMs), t1 = tOf(rows[i + 1].utcMs);
+    phaseRuns.push({ t0, t1, color: PHASE_COLORS[rows[i].phase] });
+    const side = rows[i].side;
+    sideRuns.push({ t0, t1, color: rows[i].phase === 'DAY' && side ? SIDE_COLORS[side] : 'transparent' });
+  }
+  timelinePhase.style.background = hardStopGradient(phaseRuns);
+  timelineSide.style.background  = hardStopGradient(sideRuns);
+  timelineEl.classList.add('visible');
+}
+
+function hideTimeline() {
+  timelineEl.classList.remove('visible');
+  timelinePhase.style.background = '';
+  timelineSide.style.background  = '';
+}
+
 function hideRecap() {
+  hideTimeline();
   recapEl.classList.remove('visible');
   recapTable.innerHTML = '';
   recapTitle.textContent = '';
@@ -1412,8 +1477,11 @@ const hudActions: Record<string, () => void> = {
 };
 
 window.addEventListener('keydown', (e) => {
-  // Ignore if a text field is focused (none here yet, but cheap to be safe)
-  if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
+  // Leave browser/OS shortcuts alone (Cmd+C, Cmd+L, Ctrl+M…).
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  // Ignore typing in form fields.
+  const target = e.target as HTMLElement | null;
+  if (target && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))) return;
   const action = hudActions[e.key.toLowerCase()];
   if (!action) return;
   // Stop space from re-triggering a focused button (it would double-fire after a click)
@@ -1478,12 +1546,15 @@ function animate() {
     }
     updateFlightFrame(progress);
     // Clouds keep drifting subtly even during playback for visual life.
-    clouds.rotation.y += dt * 0.01;
+    clouds.rotateY(dt * 0.01);
   } else if (controlMode === 'orbit') {
     // Idle: slow Earth spin, fixed sun from Phase 1.
     // Suspended in 'globe' mode so user drags aren't fought by the spin.
-    earth.rotation.y  += dt * 0.05;
-    clouds.rotation.y += dt * 0.065;
+    // rotateY (local axis) — NOT rotation.y += …: with the 23.4° tilt on
+    // rotation.z, the default XYZ Euler order would spin around *world* Y and
+    // make the pole precess in a cone instead of spinning around itself.
+    earth.rotateY(dt * 0.05);
+    clouds.rotateY(dt * 0.065);
   }
 
   controls.update();
