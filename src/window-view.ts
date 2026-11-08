@@ -38,6 +38,8 @@ const SKY_VERTEX = /* glsl */ `
 const SKY_FRAGMENT = /* glsl */ `
   uniform vec3 uSunDir;   // world, unit
   uniform vec3 uUp;       // local vertical at the plane, world, unit
+  uniform vec3 uMoonDir;  // topocentric Moon direction, world, unit
+  uniform float uMoonOn;  // 0 = no Moon data (no flight sample)
   varying vec3 vWorldPos;
 
   void main() {
@@ -70,6 +72,27 @@ const SKY_FRAGMENT = /* glsl */ `
     col += sunCol * (glow * max(day, tw) + disc * 2.0);
 
     float alpha = clamp(max(max(day, tw * band * 1.2), disc + glow * max(day, tw)), 0.0, 1.0);
+
+    // ── Moon ──────────────────────────────────────────────────────────────
+    // Disc drawn at 1.0° radius (≈4× the real 0.26°, same reason as the sun:
+    // legibility in a small inset). Phase comes from lighting a reconstructed
+    // sphere: o = the fragment's offset from the disc centre in the plane
+    // ⟂ uMoonDir (|o| ≤ 1 inside), n = o − uMoonDir·sqrt(1−|o|²) is the
+    // outward normal of the hemisphere facing us, lit by the sun direction
+    // (the Sun is ~400× farther than the Moon, so Earth→Sun ≈ Moon→Sun).
+    // Unlit part gets faint earthshine. Earth occludes it via depth, as for the sun.
+    float cosMoon = dot(dir, uMoonDir);
+    float moonMask = smoothstep(0.99983, 0.99986, cosMoon) * uMoonOn;   // cos 1.05° → cos 0.95°
+    if (moonMask > 0.0) {
+      vec3 o = (dir - uMoonDir * cosMoon) / 0.017452;                   // / sin 1°
+      vec3 n = o - uMoonDir * sqrt(max(0.0, 1.0 - dot(o, o)));
+      float lit = smoothstep(-0.04, 0.08, dot(n, uSunDir));
+      vec3 moonCol = vec3(0.93, 0.91, 0.86) * lit * mix(1.0, 0.55, day)  // pale against day sky
+                   + vec3(0.05, 0.06, 0.08) * (1.0 - lit) * (1.0 - day);  // earthshine at night
+      col = mix(col, col * day + moonCol, moonMask);
+      alpha = max(alpha, moonMask);
+    }
+
     gl_FragColor = vec4(col, alpha);
   }
 `;
@@ -90,7 +113,12 @@ export function createWindowView(d: WindowViewDeps) {
   const skyMat = new THREE.ShaderMaterial({
     vertexShader: SKY_VERTEX,
     fragmentShader: SKY_FRAGMENT,
-    uniforms: { uSunDir: { value: new THREE.Vector3() }, uUp: { value: new THREE.Vector3() } },
+    uniforms: {
+      uSunDir:  { value: new THREE.Vector3() },
+      uUp:      { value: new THREE.Vector3() },
+      uMoonDir: { value: new THREE.Vector3(0, 1, 0) },
+      uMoonOn:  { value: 0 },
+    },
     side: THREE.BackSide,
     transparent: true,
     depthWrite: false,
@@ -107,33 +135,54 @@ export function createWindowView(d: WindowViewDeps) {
   const q = new THREE.Quaternion();
   const up = new THREE.Vector3(), fwd = new THREE.Vector3(), right = new THREE.Vector3();
   const look = new THREE.Vector3(), sunWorld = new THREE.Vector3(), camPos = new THREE.Vector3();
+  const moonWorld = new THREE.Vector3(), rightLocal = new THREE.Vector3();
   const cloudScale  = (1 + CLOUD_ALT_KM / EARTH_RADIUS_KM) / d.cloudRadiusFactor;
-  const dip = THREE.MathUtils.degToRad(LOOK_DOWN_DEG);
 
   // Like a passenger leaning toward the glass: when the sun is up and on this
   // side, turn toward it (within ±MAX_LEAN_DEG of straight out); otherwise
   // look straight out. Eased so jumps and side switches don't snap.
   let leanDeg = 0;
+  let pitchDeg = -LOOK_DOWN_DEG;   // view elevation; raised toward a high sun/Moon
   let leanSettled = true;
   let lastMs = performance.now();
-  function updateLean(s: FlightSample, side: Side): number {
+  function updateLean(s: FlightSample, side: Side, moonLocal?: THREE.Vector3): number {
     const now = performance.now();
     const dt = Math.min(0.1, (now - lastMs) / 1000);
     lastMs = now;
     const abeam = side === 'LEFT' ? -90 : 90;
-    const relAz = THREE.MathUtils.radToDeg(Math.atan2(s.sR, s.sF));   // 0 ahead, +90 right
-    const off = ((relAz - abeam + 540) % 360) - 180;                  // sun bearing vs straight-out
-    const target = s.phase !== 'NIGHT' && Math.abs(off) < 120
+    let relAz = THREE.MathUtils.radToDeg(Math.atan2(s.sR, s.sF));     // 0 ahead, +90 right
+    let targetElev = s.elevDeg;
+    let track = s.phase !== 'NIGHT';
+    // At night, follow the Moon instead when it's above (or just at) the horizon.
+    if (!track && moonLocal && moonLocal.dot(s.pos) > -0.035) {
+      rightLocal.crossVectors(s.heading, s.pos).normalize();
+      relAz = THREE.MathUtils.radToDeg(Math.atan2(moonLocal.dot(rightLocal), moonLocal.dot(s.heading)));
+      targetElev = THREE.MathUtils.radToDeg(Math.asin(THREE.MathUtils.clamp(moonLocal.dot(s.pos), -1, 1)));
+      track = true;
+    }
+    const off = ((relAz - abeam + 540) % 360) - 180;                  // target bearing vs straight-out
+    const target = track && Math.abs(off) < 120
       ? THREE.MathUtils.clamp(off, -MAX_LEAN_DEG, MAX_LEAN_DEG)
       : 0;
-    leanDeg += (target - leanDeg) * (1 - Math.exp(-LEAN_RATE * dt));
-    leanSettled = Math.abs(target - leanDeg) < 0.05;
+    // Pitch up when the tracked body is high (> 5°) so it stays in frame;
+    // capped so the horizon never leaves the bottom of the window.
+    const targetPitch = track && Math.abs(off) < 120
+      ? -LOOK_DOWN_DEG + THREE.MathUtils.clamp(targetElev - 5, 0, 22)
+      : -LOOK_DOWN_DEG;
+    const k = 1 - Math.exp(-LEAN_RATE * dt);
+    leanDeg  += (target - leanDeg) * k;
+    pitchDeg += (targetPitch - pitchDeg) * k;
+    leanSettled = Math.abs(target - leanDeg) < 0.05 && Math.abs(targetPitch - pitchDeg) < 0.05;
     return abeam + leanDeg;
   }
 
   // `hidden`: objects that would float in the sky from this altitude.
   // Returns true while the view is still easing (caller should keep drawing).
-  function render(s: FlightSample, side: Side, rect: DOMRect, hidden: Array<THREE.Object3D | null>): boolean {
+  // `moonLocal`: optional topocentric Moon direction (Earth-local, unit).
+  function render(
+    s: FlightSample, side: Side, rect: DOMRect, hidden: Array<THREE.Object3D | null>,
+    moonLocal?: THREE.Vector3,
+  ): boolean {
     const { renderer, scene, earth, clouds, earthRadius } = d;
     earth.getWorldQuaternion(q);
     up.copy(s.pos).applyQuaternion(q);
@@ -148,9 +197,10 @@ export function createWindowView(d: WindowViewDeps) {
     camera.position.copy(camPos);
     camera.up.copy(up);
     // Horizontal bearing θ (0 = nose, +90 = right wing), then tilt down.
-    const theta = THREE.MathUtils.degToRad(updateLean(s, side));
+    const theta = THREE.MathUtils.degToRad(updateLean(s, side, moonLocal));
+    const pitch = THREE.MathUtils.degToRad(pitchDeg);
     look.copy(fwd).multiplyScalar(Math.cos(theta)).addScaledVector(right, Math.sin(theta))
-      .multiplyScalar(Math.cos(dip)).addScaledVector(up, -Math.sin(dip)).add(camPos);
+      .multiplyScalar(Math.cos(pitch)).addScaledVector(up, Math.sin(pitch)).add(camPos);
     camera.lookAt(look);
     camera.aspect = rect.width / rect.height;
     // Near plane scales with height above ground: at 100 m the ground is
@@ -162,6 +212,13 @@ export function createWindowView(d: WindowViewDeps) {
     sky.position.copy(camPos);
     skyMat.uniforms.uSunDir.value.copy(sunWorld);
     skyMat.uniforms.uUp.value.copy(up);
+    if (moonLocal) {
+      moonWorld.copy(moonLocal).applyQuaternion(q).normalize();
+      skyMat.uniforms.uMoonDir.value.copy(moonWorld);
+      skyMat.uniforms.uMoonOn.value = 1;
+    } else {
+      skyMat.uniforms.uMoonOn.value = 0;
+    }
 
     // Haze colour follows the sky near the horizon: pale blue by day, dark at night.
     const day = THREE.MathUtils.smoothstep(sunWorld.dot(up), -0.17, 0.04);

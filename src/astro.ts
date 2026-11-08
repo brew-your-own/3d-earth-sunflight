@@ -74,3 +74,30 @@ export function altitudeKm(elapsedMin: number, remainingMin: number): number {
   const ramp = Math.min(1, Math.max(0, elapsedMin) / CLIMB_MIN, Math.max(0, remainingMin) / DESCENT_MIN);
   return CRUISE_ALT_KM * ramp;
 }
+
+// ─── Shared low-level sun/time helpers (used by moon.ts) ─────────────────────
+// Same formulas as subsolarPoint above, exposed individually.
+
+export function daysSinceJ2000(utcMs: number): number {
+  return utcMs / 86400000 + 2440587.5 - 2451545.0;
+}
+
+// Sun's apparent ecliptic longitude (degrees, [0, 360)).
+export function sunEclipticLongitudeDeg(utcMs: number): number {
+  const n = daysSinceJ2000(utcMs);
+  const mod360 = (x: number) => ((x % 360) + 360) % 360;
+  const L = mod360(280.460 + 0.9856474 * n);
+  const g = degToRad(mod360(357.528 + 0.9856003 * n));
+  return mod360(L + 1.915 * Math.sin(g) + 0.020 * Math.sin(2 * g));
+}
+
+// Mean obliquity of the ecliptic (degrees).
+export function obliquityDeg(utcMs: number): number {
+  return 23.439 - 0.0000004 * daysSinceJ2000(utcMs);
+}
+
+// Greenwich Mean Sidereal Time (degrees, [0, 360)).
+export function gmstDeg(utcMs: number): number {
+  const n = daysSinceJ2000(utcMs);
+  return (((18.697374558 + 24.06570982441908 * n) % 24 + 24) % 24) * 15;
+}

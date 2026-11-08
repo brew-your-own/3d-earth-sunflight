@@ -6,6 +6,7 @@ import { type Flight, type FlightSample, type Side, buildFlight, flightSampleAt 
 import { hideRecap, onAdvicePick, renderRecap, updateRecapHighlight, updateSunViz } from './recap-panel';
 import { SEAT_LETTERS } from './seat';
 import { createWindowView } from './window-view';
+import { moonVecER, topocentricMoonDir } from './moon';
 import { arrIsoToDurationMin, durationToArrIso, formatDuration, formatTzInfo, parseDuration } from './time';
 
 // Assets are imported (not fetched) so the bundler can decide per build
@@ -1055,7 +1056,9 @@ function renderWindowView(): boolean {
   if (!show) return false;
   const rect = windowEl.getBoundingClientRect();
   if (rect.width < 1 || rect.height < 1) return false;
-  return windowView.render(currentSample!, windowSide!, rect, [currentRoute, planeMesh]);
+  const cs = currentSample!;
+  const moonDir = topocentricMoonDir(moonVecER(cs.utcMs), cs.pos, cs.altKm);
+  return windowView.render(cs, windowSide!, rect, [currentRoute, planeMesh], moonDir);
 }
 
 // Seat advice click: jump to that sunrise/sunset (paused) and look out the
