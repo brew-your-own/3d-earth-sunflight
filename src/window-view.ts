@@ -173,7 +173,12 @@ export function createWindowView(d: WindowViewDeps) {
   let pitchDeg = -LOOK_DOWN_DEG;   // view elevation; raised toward a high sun/Moon
   let leanSettled = true;
   let lastMs = performance.now();
-  function updateLean(s: FlightSample, side: Side, moonLocal?: THREE.Vector3): number {
+  // Night-time priority: aurora on this side (a broad band low on the horizon)
+  // beats the Moon, which beats looking straight out.
+  function updateLean(
+    s: FlightSample, side: Side, moonLocal?: THREE.Vector3,
+    aurora?: { strength: number; dirLocal: THREE.Vector3 },
+  ): number {
     const now = performance.now();
     const dt = Math.min(0.1, (now - lastMs) / 1000);
     lastMs = now;
@@ -181,7 +186,17 @@ export function createWindowView(d: WindowViewDeps) {
     let relAz = THREE.MathUtils.radToDeg(Math.atan2(s.sR, s.sF));     // 0 ahead, +90 right
     let targetElev = s.elevDeg;
     let track = s.phase !== 'NIGHT';
-    // At night, follow the Moon instead when it's above (or just at) the horizon.
+    const offOf = (az: number) => ((az - abeam + 540) % 360) - 180;
+    if (!track && aurora && aurora.strength > 0) {
+      rightLocal.crossVectors(s.heading, s.pos).normalize();
+      const az = THREE.MathUtils.radToDeg(Math.atan2(aurora.dirLocal.dot(rightLocal), aurora.dirLocal.dot(s.heading)));
+      if (Math.abs(offOf(az)) < 120) {   // only if it's out *this* window
+        relAz = az;
+        targetElev = 0;                  // keep the horizon band in frame, no pitch-up
+        track = true;
+      }
+    }
+    // Otherwise at night, follow the Moon when it's above (or just at) the horizon.
     if (!track && moonLocal && moonLocal.dot(s.pos) > -0.035) {
       rightLocal.crossVectors(s.heading, s.pos).normalize();
       relAz = THREE.MathUtils.radToDeg(Math.atan2(moonLocal.dot(rightLocal), moonLocal.dot(s.heading)));
@@ -225,7 +240,8 @@ export function createWindowView(d: WindowViewDeps) {
     camera.position.copy(camPos);
     camera.up.copy(up);
     // Horizontal bearing θ (0 = nose, +90 = right wing), then tilt down.
-    const theta = THREE.MathUtils.degToRad(updateLean(s, side, moonLocal));
+    const aurora = auroraAt(s);
+    const theta = THREE.MathUtils.degToRad(updateLean(s, side, moonLocal, aurora));
     const pitch = THREE.MathUtils.degToRad(pitchDeg);
     look.copy(fwd).multiplyScalar(Math.cos(theta)).addScaledVector(right, Math.sin(theta))
       .multiplyScalar(Math.cos(pitch)).addScaledVector(up, Math.sin(pitch)).add(camPos);
@@ -250,7 +266,6 @@ export function createWindowView(d: WindowViewDeps) {
 
     // Aurora: direction + strength from the current sample. While it's on
     // screen the rays drift, so report "still animating" to keep frames coming.
-    const aurora = auroraAt(s);
     skyMat.uniforms.uAuroraStrength.value = aurora.strength;
     if (aurora.strength > 0) {
       skyMat.uniforms.uAuroraDir.value.copy(aurora.dirLocal).applyQuaternion(q).normalize();
