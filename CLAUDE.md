@@ -13,9 +13,13 @@ npm run dev      # Vite dev server at :5173 (hot reload); binds --host for LAN/p
 npm run build    # type-check + chunked production build → dist/ (separate hashed assets, suitable for web hosting)
 npm run package  # type-check + single-file build → dist/index.html (one ~5 MB self-contained file, double-clickable)
 npm run preview  # serve the dist/ build locally
+npm test         # vitest unit tests for the pure modules (also gates the Pages deploy)
+npm run typecheck
 
 # One-off: rebuild src/airports.json from airports/airports.csv.
-# Adds an IANA `tz` field per airport via tz-lookup. Re-run only if the CSV changes.
+# Adds an IANA `tz` field per airport via tz-lookup and a search `rank`
+# (size tier ×2 + scheduled service). Drops heliports/seaplane bases/closed.
+# Re-run only if the CSV changes.
 node scripts/build-airports.mjs
 ```
 
@@ -25,41 +29,40 @@ node scripts/build-airports.mjs
 - **Three.js 0.175** with `@types/three`
 - **luxon** — IANA timezone math for local↔UTC conversion at runtime
 - **tz-lookup** (dev only) — lat/lon → IANA tz at build time
-- All application code lives in `src/main.ts`; entry point is `index.html`
+- **vitest** — unit tests (`src/*.test.ts`), run in Node; pure modules only
+- Entry point is `index.html` → `src/main.ts`
 
-## Layout of `src/main.ts`
+## Source layout
 
-Single-file scene, organized top-to-bottom roughly in lifecycle order:
+Pure modules (no DOM, no scene state — import freely from tests):
 
-1. **Renderer** — `WebGLRenderer` with ACES filmic tone mapping; exposure driven by the contrast slider
-2. **Scene + Camera + Controls** — `OrbitControls` with damping, no pan, clamped zoom
-3. **Lights** — single directional "sun" + dim ambient; both controlled by the contrast slider, and the sun is repositioned to the real subsolar point during flight playback
-4. **Textures** — `loadColor` (sRGB) vs `loadData` (linear) helpers
-5. **Starfield + Earth (tilted 23.4° on Z) + Clouds**
-6. **Lat/lon helpers + great-circle drawing** (`latLonToVec3`, `greatCirclePoints` via slerp with antipodal fallback)
-7. **Airports + routing** — fetched from `/airports.json`; `setRoute(from, to)` swaps the visible great circle
-8. **Subsolar point** — NOAA-derived (mean longitude + ecliptic correction + GMST); ~0.01° accuracy
-9. **Flight state + playback** — `setFlight(from, to, depLocal, arrLocal)`; cached slerp params, plane mesh, `progress ∈ [0, 1]`
-10. **Recap table** — offline 2000-sample scan that records DAY/TWILIGHT/NIGHT transitions and LEFT/RIGHT sun-side changes (during DAY); rendered in the top-right recap panel with timestamps in the departure airport's IANA TZ
-11. **Form wiring, HUD, contrast slider, keyboard toggles, collapsible-panel wiring**
-12. **Animation loop** — flight playback when a flight is loaded, idle slow spin otherwise
+- `src/geo.ts` — `latLonToVec3` / `vec3ToLatLon`, `EARTH_RADIUS_KM`, great-circle `Arc` (`makeArc`, `arcPoint`, `arcHeading`: p1 + unit tangent, robust for coincident/antipodal points), `greatCirclePoints`
+- `src/astro.ts` — `subsolarPoint` (NOAA-derived, ~0.01°), cruise-altitude thresholds, `daylightLabel`
+- `src/flight.ts` — `buildFlight` (local times → UTC via each airport's tz, segments split by arc length, zero-length legs dropped), `planeAt`, `flightSampleAt` (sun right/forward/up components, elevation, phase, side — the single source of truth for both HUD and recap), `computeRecap` (2000-sample scan → rows + stats)
+- `src/airports.ts` — `Airport` type, the imported `airports` record, `searchAirports` (tiered match + rank tiebreak, lowercased index built lazily), `resolveAirportCode`
+- `src/time.ts` — `parseDuration`, `formatDuration`, dep+duration ↔ arrival across timezones, `formatTzInfo`
+
+DOM / scene modules:
+
+- `src/recap-panel.ts` — recap table, time breakdown, plane/sun SVG, timeline strip under the scrubber
+- `src/main.ts` — renderer, camera/controls (orbit + globe drag), lights, textures, Earth/clouds/stars, route drawing (`setRoute`), flight state + playback (`setFlight`, `updateFlightFrame`), form/autocomplete/presets/URL wiring, HUD + hotkeys, live satellite, collapsible panels, animation loop
 
 ## Key conventions
 
 - **Lat/lon → 3D**: `latLonToVec3` puts `(lat 0, lon 0)` at `+X`, north pole at `+Y`, `lon +90°` at **`-Z`**. The negative Z is deliberate: Three's `SphereGeometry` UVs trace -X→+Z→+X→-Z→-X as `u` goes 0→1, so for an equirectangular texture (u: -180→+180) longitude increases clockwise around +Y.
 - **Earth-local frame for routes**: great-circle line, endpoint markers, and the plane mesh are all parented to the Earth mesh — they inherit the axial tilt and any rotation, staying glued to the surface.
-- **Sun positioning during a flight**: subsolar point is computed in Earth's *local* frame, then transformed to world via `earth.getWorldQuaternion(...)`. The directional light goes along that direction × 50.
+- **Sun positioning during a flight**: subsolar point is computed in Earth's *local* frame, then transformed to world via `earth.getWorldQuaternion(...)`. The directional light goes along that direction × 50. The light is re-aimed every frame (a globe-mode drag rotates the Earth even when paused), but `updateFlightFrame` skips the sample math and DOM writes when `t` hasn't changed — reset `lastFrameT = NaN` whenever the flight changes.
 - **Color spaces matter**: textures used for color (`map`, `emissiveMap`, sky) need `colorSpace = SRGBColorSpace`; data textures (`normalMap`, `alphaMap`) stay linear (the loader helpers enforce this).
 - **`OrbitControls` requires `controls.update()` each frame** when `enableDamping = true`.
 - **Day/twilight/night thresholds** are altitude-corrected for an 11 km cruise (`CRUISE_ALT_KM`): horizon dip (~3.36°) + refraction/semidiameter (0.833°) puts apparent sunrise at solar elevation ≈ -4.2° (`SUNRISE_ELEV_DEG`). DAY above that, TWILIGHT for the next 6° (civil), NIGHT below (`NIGHT_ELEV_DEG` ≈ -10.2°). Climb/descent is ignored.
 - **Earth spin must use `rotateY()`** (local axis), never `rotation.y +=` — with the tilt on `rotation.z`, the default XYZ Euler order would spin around world Y and make the pole precess.
-- **Timeline strip** under the scrubber is built from the recap rows (`renderTimeline`): top band = phase, bottom band = sun side during DAY (blue left / orange right, matching the recap stats).
+- **Timeline strip** under the scrubber is built from the recap rows (`renderTimeline` in `recap-panel.ts`): top band = phase, bottom band = sun side during DAY (blue left / orange right, matching the recap stats).
 - **Three collapsible UI panels** — settings (top-left), route (bottom-left, with presets merged in), recap (top-right). Layout/CSS lives in `index.html`: each is a `.panel` whose body hides under a `.collapsed` class, toggled by one `.panel-toggle` button. The wiring in `main.ts` is tiny — click toggles `.collapsed`; on viewports < 760px panels start collapsed and opening one collapses the others. Same markup at every screen size (no separate mobile codepath); widths use `min(…, 100vw - 24px)` to cap on a phone.
 
 ## Data files
 
 - `airports/airports.csv` — OurAirports public-domain dump (~13 MB), source of truth.
-- `src/airports.json` — slim per-IATA JSON built from the CSV (~9k entries, ~1.2 MB), `tz` filled at build time. **Imported** into `main.ts` (not fetched at runtime) so the bundler can inline it for the singlefile build.
+- `src/airports.json` — slim per-IATA JSON built from the CSV (~8.8k entries, ~1.2 MB), `tz` and `rank` filled at build time. **Imported** into `airports.ts` (not fetched at runtime) so the bundler can inline it for the singlefile build.
 - `src/textures/` — Solar System Scope Earth textures (2K) + Milky Way starfield. Also imported (not in `public/`) so Vite can hash-and-emit (normal build) or base64-inline (singlefile build).
 
 No `public/` folder is used: keeping assets out of `public/` is what enables the singlefile packaging to work.

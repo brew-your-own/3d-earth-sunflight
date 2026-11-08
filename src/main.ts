@@ -1,6 +1,10 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { DateTime } from 'luxon';
+import { type Airport, type Suggestion, airports, resolveAirportCode, searchAirports } from './airports';
+import { greatCirclePoints, latLonToVec3, vec3ToLatLon } from './geo';
+import { type Flight, buildFlight, flightSampleAt } from './flight';
+import { hideRecap, renderRecap, updateRecapHighlight, updateSunViz } from './recap-panel';
+import { arrIsoToDurationMin, durationToArrIso, formatDuration, formatTzInfo, parseDuration } from './time';
 
 // Assets are imported (not fetched) so the bundler can decide per build
 // whether to ship them as separate hashed files (normal build) or inline as
@@ -10,7 +14,6 @@ import nightMapUrl  from './textures/2k_earth_nightmap.jpg';
 import normalMapUrl from './textures/2k_earth_normal_map.png';
 import cloudsMapUrl from './textures/2k_earth_clouds.jpg';
 import starsMapUrl  from './textures/2k_stars_milky_way.jpg';
-import airportsData from './airports.json';
 
 // ─── Renderer ────────────────────────────────────────────────────────────────
 
@@ -155,7 +158,7 @@ scene.add(stars);
 
 // ─── Earth ───────────────────────────────────────────────────────────────────
 
-export const EARTH_RADIUS = 2;
+const EARTH_RADIUS = 2;
 
 const earth = new THREE.Mesh(
   new THREE.SphereGeometry(EARTH_RADIUS, 96, 96),
@@ -193,74 +196,6 @@ const clouds = new THREE.Mesh(
 );
 clouds.rotation.z = THREE.MathUtils.degToRad(23.4);
 scene.add(clouds);
-
-// ─── Lat/lon helpers & great-circle paths ───────────────────────────────────
-
-// Convention (in Earth's local frame, before tilt/spin):
-//   lat= 0, lon=   0  →  +X   (prime meridian on equator)
-//   lat= 0, lon= +90  →  -Z   (east of Greenwich → into the screen)
-//   lat= 0, lon= -90  →  +Z   (west of Greenwich → out of the screen)
-//   lat=+90, lon=any  →  +Y   (north pole)
-// Three's SphereGeometry UVs trace -X→+Z→+X→-Z→-X as u goes 0→1, so an
-// equirectangular map (u: -180°→+180°) ends up with longitude increasing
-// clockwise around +Y — hence the negative sign on Z below.
-function latLonToVec3(latDeg: number, lonDeg: number, radius: number): THREE.Vector3 {
-  const lat = THREE.MathUtils.degToRad(latDeg);
-  const lon = THREE.MathUtils.degToRad(lonDeg);
-  const cosLat = Math.cos(lat);
-  return new THREE.Vector3(
-    radius * cosLat * Math.cos(lon),
-    radius * Math.sin(lat),
-    -radius * cosLat * Math.sin(lon)
-  );
-}
-
-// Great-circle arc from unit vector p1 to p2, expressed as p1 plus a unit
-// tangent t1 (⊥ p1, in the arc's plane, pointing toward p2):
-//   pos(u)     = p1·cos(uω) + t1·sin(uω)
-//   heading(u) = −p1·sin(uω) + t1·cos(uω)
-// Unlike the textbook slerp (which divides by sin ω) this never produces NaN:
-// coincident points give ω = 0, and antipodal points (where every great
-// circle qualifies) get an arbitrary but stable perpendicular.
-type Arc = { p1: THREE.Vector3; t1: THREE.Vector3; omega: number };
-
-function makeArc(p1: THREE.Vector3, p2: THREE.Vector3): Arc {
-  const d = THREE.MathUtils.clamp(p1.dot(p2), -1, 1);
-  const omega = Math.acos(d);
-  const t1 = p2.clone().addScaledVector(p1, -d);   // reject p1 component
-  if (t1.lengthSq() < 1e-12) {
-    // Coincident or antipodal: pick any direction perpendicular to p1.
-    const ref = Math.abs(p1.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
-    t1.crossVectors(ref, p1);
-  }
-  t1.normalize();
-  return { p1: p1.clone(), t1, omega };
-}
-
-function arcPoint(arc: Arc, u: number, out = new THREE.Vector3()): THREE.Vector3 {
-  const a = u * arc.omega;
-  return out.copy(arc.p1).multiplyScalar(Math.cos(a)).addScaledVector(arc.t1, Math.sin(a));
-}
-
-function arcHeading(arc: Arc, u: number, out = new THREE.Vector3()): THREE.Vector3 {
-  const a = u * arc.omega;
-  return out.copy(arc.p1).multiplyScalar(-Math.sin(a)).addScaledVector(arc.t1, Math.cos(a));
-}
-
-// Sample N+1 positions along the arc between two surface points.
-function greatCirclePoints(
-  lat1: number, lon1: number,
-  lat2: number, lon2: number,
-  radius: number,
-  segments = 128
-): THREE.Vector3[] {
-  const arc = makeArc(latLonToVec3(lat1, lon1, 1), latLonToVec3(lat2, lon2, 1));
-  const points: THREE.Vector3[] = [];
-  for (let i = 0; i <= segments; i++) {
-    points.push(arcPoint(arc, i / segments).multiplyScalar(radius));
-  }
-  return points;
-}
 
 // Lift the line slightly above the cloud layer (1.01) so it's always visible.
 const PATH_LIFT = 1.02;
@@ -321,16 +256,6 @@ function createSurfaceMarker(lat: number, lon: number, color = 0xff3333): THREE.
 
 // ─── Airports & routing ──────────────────────────────────────────────────────
 
-type Airport = {
-  name: string;
-  lat: number;
-  lon: number;
-  country: string;
-  city: string;
-  tz: string;  // IANA timezone, e.g. "America/New_York"
-};
-
-let airports: Record<string, Airport> = {};
 let currentRoute: THREE.Group | null = null;
 
 function clearRoute() {
@@ -397,106 +322,12 @@ function setRoute(fromCode: string, toCode: string, viaCodes: string[] = []):
 // Expose for tinkering from the devtools console.
 (window as unknown as { setRoute: typeof setRoute }).setRoute = setRoute;
 
-// ─── Airport search (autocomplete) ──────────────────────────────────────────
-
-const MAX_SUGGESTIONS = 8;
-
-type Suggestion = { code: string; ap: Airport };
-
-// Rank: exact IATA > IATA prefix > exact city > city prefix > name prefix >
-// city contains > name contains > IATA contains. Returns top N.
-function searchAirports(query: string): Suggestion[] {
-  const q = query.trim().toLowerCase();
-  if (!q) return [];
-  const hits: Array<{ code: string; ap: Airport; score: number }> = [];
-  for (const code in airports) {
-    const ap = airports[code];
-    const codeL = code.toLowerCase();
-    const cityL = (ap.city || '').toLowerCase();
-    const nameL = (ap.name || '').toLowerCase();
-    let score = 0;
-    if      (codeL === q)            score = 1000;
-    else if (codeL.startsWith(q))    score = 900;
-    else if (cityL === q)            score = 800;
-    else if (cityL.startsWith(q))    score = 700;
-    else if (nameL.startsWith(q))    score = 600;
-    else if (cityL.includes(q))      score = 500;
-    else if (nameL.includes(q))      score = 400;
-    else if (codeL.includes(q))      score = 300;
-    else continue;
-    hits.push({ code, ap, score });
-  }
-  hits.sort((a, b) => b.score - a.score || a.code.localeCompare(b.code));
-  return hits.slice(0, MAX_SUGGESTIONS).map(({ code, ap }) => ({ code, ap }));
-}
-
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 }
 
-// Resolve raw input text → IATA code. If user typed exactly a known IATA,
-// use it; otherwise pick the top search hit. Returns '' if nothing matches.
-function resolveAirportCode(value: string): string {
-  const v = value.trim();
-  if (!v) return '';
-  const upper = v.toUpperCase();
-  if (v.length === 3 && airports[upper]) return upper;
-  const hits = searchAirports(v);
-  return hits[0]?.code ?? '';
-}
-
-// ─── Astronomy: subsolar point ──────────────────────────────────────────────
-
-// Subsolar point at a given UTC instant: where on Earth (lat/lon, in the
-// Earth-fixed/ECEF frame) the sun is directly overhead. NOAA-derived formula,
-// accurate to ~0.01° — well past anything we'd notice visually.
-function subsolarPoint(utcMs: number): { lat: number; lon: number } {
-  const jd = utcMs / 86400000 + 2440587.5;            // Julian date (UT1≈UTC)
-  const n  = jd - 2451545.0;                          // days since J2000.0
-
-  const mod360 = (x: number) => ((x % 360) + 360) % 360;
-  const mod24  = (x: number) => ((x % 24)  + 24)  % 24;
-
-  const L  = mod360(280.460 + 0.9856474 * n);                                  // mean longitude
-  const g  = THREE.MathUtils.degToRad(mod360(357.528 + 0.9856003 * n));        // mean anomaly
-  const lambda  = THREE.MathUtils.degToRad(
-    L + 1.915 * Math.sin(g) + 0.020 * Math.sin(2 * g)                          // ecliptic longitude
-  );
-  const epsilon = THREE.MathUtils.degToRad(23.439 - 0.0000004 * n);            // obliquity
-
-  const decl = Math.asin(Math.sin(epsilon) * Math.sin(lambda));
-  const ra   = Math.atan2(Math.cos(epsilon) * Math.sin(lambda), Math.cos(lambda));
-
-  // Greenwich Mean Sidereal Time (Meeus approximation)
-  const gmstDeg = mod24(18.697374558 + 24.06570982441908 * n) * 15;
-
-  let lon = THREE.MathUtils.radToDeg(ra) - gmstDeg;
-  lon = ((lon + 540) % 360) - 180;
-  return { lat: THREE.MathUtils.radToDeg(decl), lon };
-}
-
 // ─── Flight state & animation ────────────────────────────────────────────────
-
-// One great-circle leg between two consecutive route points. tStart..tEnd is
-// the segment's slice of overall progress (t ∈ [0,1]) — split proportional to
-// arc length so the plane moves at uniform angular speed across the whole path.
-type Segment = {
-  arc: Arc;
-  distanceKm: number;
-  tStart: number; tEnd: number;
-};
-
-type Flight = {
-  from: Airport; to: Airport;
-  fromCode: string; toCode: string;
-  waypoints: Airport[]; waypointCodes: string[];
-  depUtcMs: number; arrUtcMs: number; durationMs: number;
-  segments: Segment[];
-  distanceKm: number; speedKmh: number;
-};
-
-const EARTH_RADIUS_KM = 6371;
 
 let flight: Flight | null = null;
 let progress = 0;              // 0..1 along the route
@@ -520,6 +351,7 @@ function ensurePlane(): THREE.Mesh {
 
 function clearFlight() {
   flight = null;
+  lastFrameT = NaN;
   progress = 0;
   playing = false;
   if (planeMesh) {
@@ -531,19 +363,6 @@ function clearFlight() {
   hideRecap();
 }
 
-// Position + heading along the piecewise great circle, given overall t ∈ [0,1].
-// Walks segments to find the active one, then moves along its arc. Heading is
-// the arc's tangent at that point, pointing dep → arr.
-function planeAt(f: Flight, t: number): { pos: THREE.Vector3; heading: THREE.Vector3 } {
-  let seg = f.segments[f.segments.length - 1];
-  for (const s of f.segments) {
-    if (t <= s.tEnd) { seg = s; break; }
-  }
-  const span = seg.tEnd - seg.tStart;
-  const u    = span > 0 ? THREE.MathUtils.clamp((t - seg.tStart) / span, 0, 1) : 0;
-  return { pos: arcPoint(seg.arc, u), heading: arcHeading(seg.arc, u) };
-}
-
 function setFlight(
   fromCode: string, toCode: string,
   depLocalStr: string, arrLocalStr: string,
@@ -551,45 +370,13 @@ function setFlight(
 ): { ok: true } | { ok: false; error: string } {
   const r = setRoute(fromCode, toCode, viaCodes);
   if (!r.ok) return r;
-
-  const dep = DateTime.fromISO(depLocalStr, { zone: r.from.tz });
-  const arr = DateTime.fromISO(arrLocalStr, { zone: r.to.tz });
-  if (!dep.isValid) return { ok: false, error: `Bad departure: ${dep.invalidReason ?? 'invalid'}` };
-  if (!arr.isValid) return { ok: false, error: `Bad arrival: ${arr.invalidReason ?? 'invalid'}` };
-  const depMs = dep.toMillis();
-  const arrMs = arr.toMillis();
-  if (arrMs <= depMs) return { ok: false, error: 'Arrival must be after departure (UTC).' };
-
-  // Build segments and split overall t-range proportional to arc length.
-  // Zero-length legs (a waypoint repeating its neighbour) are dropped: they
-  // contribute no distance and their heading would be meaningless.
-  const chain = [r.from, ...r.waypoints, r.to];
-  const pts   = chain.map((ap) => latLonToVec3(ap.lat, ap.lon, 1));
-  const arcs: Arc[] = [];
-  for (let i = 0; i < pts.length - 1; i++) {
-    const arc = makeArc(pts[i], pts[i + 1]);
-    if (arc.omega > 1e-9) arcs.push(arc);
-  }
-  const totalOmega = arcs.reduce((sum, a) => sum + a.omega, 0);
-  if (arcs.length === 0) return { ok: false, error: 'Route has zero length.' };
-  const segments: Segment[] = [];
-  let cumT = 0;
-  arcs.forEach((arc, i) => {
-    const tStart = cumT;
-    const tEnd   = i === arcs.length - 1 ? 1 : cumT + arc.omega / totalOmega;
-    cumT = tEnd;
-    segments.push({ arc, distanceKm: arc.omega * EARTH_RADIUS_KM, tStart, tEnd });
-  });
-  const distanceKm = totalOmega * EARTH_RADIUS_KM;
-  const durationMs = arrMs - depMs;
-  flight = {
-    from: r.from, to: r.to, fromCode, toCode,
-    waypoints: r.waypoints, waypointCodes: viaCodes.slice(),
-    depUtcMs: depMs, arrUtcMs: arrMs, durationMs,
-    segments,
-    distanceKm,
-    speedKmh: distanceKm / (durationMs / 3_600_000),
-  };
+  const built = buildFlight(
+    { from: r.from, to: r.to, fromCode, toCode, waypoints: r.waypoints, waypointCodes: viaCodes },
+    depLocalStr, arrLocalStr,
+  );
+  if (!built.ok) return built;
+  flight = built.flight;
+  lastFrameT = NaN;
   ensurePlane();
   progress = 0;
   playing = false;
@@ -626,273 +413,43 @@ function sideLabel(rightDot: number, forwardDot: number): string {
   return `Sun: ${side}, ${qual}`;
 }
 
-// Sunrise/sunset as seen from the cabin at cruise altitude. Elevation is
-// measured against the geometric (level) horizon, but from 11 km up the
-// visible horizon sits lower:
-//   - horizon dip  acos(R / (R + h))      ≈ 3.36°
-//   - refraction (0.57°) + solar semidiameter (0.27°) — the same 0.833° used
-//     for standard ground-level sunrise (upper limb touching the horizon)
-// So the passenger sees the sun at elevation ≳ -4.2°, not 0°. Civil twilight
-// keeps its 6° depth below that apparent horizon. Altitude is held constant
-// for the whole flight (climb/descent ignored).
-const CRUISE_ALT_KM    = 11;
-const HORIZON_DIP_DEG  = THREE.MathUtils.radToDeg(Math.acos(6371 / (6371 + CRUISE_ALT_KM)));
-const SUNRISE_ELEV_DEG = -(HORIZON_DIP_DEG + 0.833);
-const NIGHT_ELEV_DEG   = SUNRISE_ELEV_DEG - 6;
+// Sun direction (Earth-local) for the frame last drawn. The light is re-aimed
+// every frame from this, because the Earth can be rotated by a drag even
+// while the flight is paused; everything else only changes with t.
+const sunLocalNow = new THREE.Vector3(1, 0, 0);
+const earthWorldQ = new THREE.Quaternion();
+let lastFrameT = NaN;   // NaN → force a redraw on the next call
 
-function daylightLabel(elevDeg: number): string {
-  if (elevDeg >= SUNRISE_ELEV_DEG) return 'DAY';
-  if (elevDeg >= NIGHT_ELEV_DEG)   return 'TWILIGHT';
-  return 'NIGHT';
-}
-
-// Sample one moment along the flight and return the derived flight-frame
-// quantities needed to decide phase + sun side. Shared by per-frame HUD and
-// by the offline transition scan.
-function flightSampleAt(f: Flight, t: number): {
-  utcMs: number; pos: THREE.Vector3; heading: THREE.Vector3; sunLocal: THREE.Vector3;
-  sR: number; sU: number; elevDeg: number; phase: 'DAY' | 'TWILIGHT' | 'NIGHT';
-  side: 'LEFT' | 'RIGHT';
-} {
-  const utcMs = f.depUtcMs + t * f.durationMs;
-  const { pos, heading } = planeAt(f, t);
-  const sub = subsolarPoint(utcMs);
-  const sunLocal = latLonToVec3(sub.lat, sub.lon, 1);
-  const up    = pos;
-  const right = new THREE.Vector3().crossVectors(heading, up).normalize();
-  const sR = sunLocal.dot(right);
-  const sU = sunLocal.dot(up);
-  const elevDeg = THREE.MathUtils.radToDeg(Math.asin(sU));
-  const phase = daylightLabel(elevDeg) as 'DAY' | 'TWILIGHT' | 'NIGHT';
-  const side: 'LEFT' | 'RIGHT' = sR > 0 ? 'RIGHT' : 'LEFT';
-  return { utcMs, pos, heading, sunLocal, sR, sU, elevDeg, phase, side };
-}
-
-// Scan the flight at fine resolution and collect phase / side transitions.
-// Step count ≈ 2000 → ~25 s resolution for a 14 h flight, fine for visualization.
-type RecapRow = {
-  utcMs: number; phase: string; label: string;
-  kind: 'endpoint' | 'phase' | 'side';
-  side?: 'LEFT' | 'RIGHT';   // sun side at this row (only meaningful during DAY)
-  endpoint?: boolean;
-};
-type RecapStats = { rightPct: number; leftPct: number; twilightPct: number; nightPct: number };
-
-function computeRecap(f: Flight): { rows: RecapRow[]; stats: RecapStats } {
-  const N = 2000;
-  const rows: RecapRow[] = [];
-  let right = 0, left = 0, twilight = 0, night = 0;
-  const tally = (s: { phase: string; side: string }) => {
-    if (s.phase === 'DAY') { if (s.side === 'RIGHT') right++; else left++; }
-    else if (s.phase === 'TWILIGHT') twilight++;
-    else if (s.phase === 'NIGHT') night++;
-  };
-
-  const first = flightSampleAt(f, 0);
-  tally(first);
-  const depExtra = first.phase === 'DAY' ? `, sun on the ${first.side}` : '';
-  rows.push({
-    utcMs: f.depUtcMs,
-    phase: first.phase,
-    label: `Depart ${f.fromCode} — ${first.phase}${depExtra}`,
-    kind: 'endpoint', side: first.side,
-    endpoint: true,
-  });
-
-  let prevPhase = first.phase;
-  let prevSide  = first.side;
-  for (let i = 1; i <= N; i++) {
-    const s = flightSampleAt(f, i / N);
-    tally(s);
-    if (s.phase !== prevPhase) {
-      const extra = s.phase === 'DAY' ? `, sun on the ${s.side}` : '';
-      rows.push({ utcMs: s.utcMs, phase: s.phase, label: `→ ${s.phase}${extra}`, kind: 'phase', side: s.side });
-    } else if (s.phase === 'DAY' && s.side !== prevSide) {
-      rows.push({ utcMs: s.utcMs, phase: 'DAY', label: `Sun → ${s.side}`, kind: 'side', side: s.side });
-    }
-    prevPhase = s.phase;
-    prevSide  = s.side;
-  }
-
-  rows.push({
-    utcMs: f.arrUtcMs,
-    phase: prevPhase,
-    label: `Arrive ${f.toCode}`,
-    kind: 'endpoint', side: prevSide,
-    endpoint: true,
-  });
-
-  const total = N + 1;
-  const stats: RecapStats = {
-    rightPct:    (right    / total) * 100,
-    leftPct:     (left     / total) * 100,
-    twilightPct: (twilight / total) * 100,
-    nightPct:    (night    / total) * 100,
-  };
-  return { rows, stats };
-}
-
-const recapEl       = document.getElementById('recap') as HTMLDivElement;
-const recapTitle    = recapEl.querySelector('.title')        as HTMLDivElement;
-const recapTable    = recapEl.querySelector('table')         as HTMLTableElement;
-const recapStatsTitle = recapEl.querySelector('.stats-title') as HTMLDivElement;
-const recapStatsTable = recapEl.querySelector('table.stats')  as HTMLTableElement;
-const sunIcon         = document.getElementById('sun-icon')   as SVGGElement | null;
-
-// Sun orbits the plane silhouette at a fixed radius. Plane is drawn facing up
-// (-y in SVG), so:
-//   sun ahead (sF > 0, sR = 0) → top of viz
-//   sun right (sR > 0, sF = 0) → right of viz
-// Hidden during NIGHT.
-const SUN_VIZ_RADIUS = 82;
-function updateSunViz(sR: number, sF: number, elevDeg: number) {
-  if (!sunIcon) return;
-  if (elevDeg < NIGHT_ELEV_DEG) {
-    sunIcon.classList.add('hidden');
-    return;
-  }
-  sunIcon.classList.remove('hidden');
-  const a = Math.atan2(sR, sF);
-  const x = SUN_VIZ_RADIUS * Math.sin(a);
-  const y = -SUN_VIZ_RADIUS * Math.cos(a);
-  sunIcon.setAttribute('transform', `translate(${x.toFixed(1)},${y.toFixed(1)})`);
-}
-
-let recapRowTimes: number[] = [];                // utcMs per row, ascending
-let recapTrEls:    HTMLTableRowElement[] = [];
-let currentRowIdx = -1;
-
-function renderRecap(f: Flight) {
-  const { rows, stats } = computeRecap(f);
-  recapTitle.textContent = `Phase transitions — times in ${f.from.tz}`;
-  recapTable.innerHTML = rows.map((r) => {
-    const t = DateTime.fromMillis(r.utcMs).setZone(f.from.tz).toFormat('LLL dd HH:mm');
-    const cls = `phase-${r.phase}${r.endpoint ? ' endpoint' : ''}`;
-    return `<tr class="${cls}"><td class="time">${t}</td><td class="label">${r.label}</td></tr>`;
-  }).join('');
-  recapStatsTitle.textContent = 'Time breakdown';
-  const pct = (v: number) => `${v.toFixed(0)}%`;
-  recapStatsTable.innerHTML = [
-    `<tr class="phase-DAY"><td colspan="2" class="sun-pct">` +
-      `<span class="side-LEFT">${pct(stats.leftPct)} ←</span> Sun <span class="side-RIGHT">→ ${pct(stats.rightPct)}</span></td></tr>`,
-    `<tr class="phase-TWILIGHT"><td class="label">Twilight</td><td class="pct">${pct(stats.twilightPct)}</td></tr>`,
-    `<tr class="phase-NIGHT"><td class="label">Night</td><td class="pct">${pct(stats.nightPct)}</td></tr>`,
-    `<tr><td colspan="2" class="footnote">Sunrise/sunset at ${CRUISE_ALT_KM} km cruise: sun elev ${SUNRISE_ELEV_DEG.toFixed(1)}°</td></tr>`,
-  ].join('');
-  renderTimeline(f, rows);
-  recapEl.classList.add('visible');
-  recapRowTimes = rows.map((r) => r.utcMs);
-  recapTrEls    = Array.from(recapTable.querySelectorAll('tr')) as HTMLTableRowElement[];
-  currentRowIdx = -1;
-}
-
-// Highlight the last row whose timestamp is ≤ utcMs (the segment we're inside).
-function updateRecapHighlight(utcMs: number) {
-  if (recapTrEls.length === 0) return;
-  let idx = -1;
-  for (let i = 0; i < recapRowTimes.length; i++) {
-    if (recapRowTimes[i] <= utcMs) idx = i; else break;
-  }
-  if (idx === currentRowIdx) return;
-  if (currentRowIdx >= 0) recapTrEls[currentRowIdx].classList.remove('current');
-  if (idx >= 0) {
-    recapTrEls[idx].classList.add('current');
-    recapTrEls[idx].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-  }
-  currentRowIdx = idx;
-}
-
-// ─── Timeline strip under the scrubber ──────────────────────────────────────
-// Two hard-stop gradient bands, aligned with the scrub slider's track:
-//   top    — DAY / TWILIGHT / NIGHT (same colors as the recap table)
-//   bottom — sun side during DAY (left / right), empty otherwise
-// Built from the recap rows: each row starts a run that lasts until the next.
-
-const timelineEl     = document.getElementById('timeline')       as HTMLDivElement;
-const timelinePhase  = timelineEl.querySelector('.tl-phase')     as HTMLDivElement;
-const timelineSide   = timelineEl.querySelector('.tl-side')      as HTMLDivElement;
-
-const PHASE_COLORS: Record<string, string> = {
-  DAY: '#ffd84d', TWILIGHT: '#9b6bff', NIGHT: '#2f4fa8',
-};
-const SIDE_COLORS = { LEFT: '#4fc3ff', RIGHT: '#ff8a3d' } as const;
-
-function hardStopGradient(runs: Array<{ t0: number; t1: number; color: string }>): string {
-  const stops = runs.flatMap(({ t0, t1, color }) =>
-    [`${color} ${(t0 * 100).toFixed(2)}%`, `${color} ${(t1 * 100).toFixed(2)}%`]);
-  return `linear-gradient(to right, ${stops.join(', ')})`;
-}
-
-function renderTimeline(f: Flight, rows: RecapRow[]) {
-  const tOf = (utcMs: number) => THREE.MathUtils.clamp((utcMs - f.depUtcMs) / f.durationMs, 0, 1);
-  const phaseRuns: Array<{ t0: number; t1: number; color: string }> = [];
-  const sideRuns:  Array<{ t0: number; t1: number; color: string }> = [];
-  for (let i = 0; i < rows.length - 1; i++) {
-    const t0 = tOf(rows[i].utcMs), t1 = tOf(rows[i + 1].utcMs);
-    phaseRuns.push({ t0, t1, color: PHASE_COLORS[rows[i].phase] });
-    const side = rows[i].side;
-    sideRuns.push({ t0, t1, color: rows[i].phase === 'DAY' && side ? SIDE_COLORS[side] : 'transparent' });
-  }
-  timelinePhase.style.background = hardStopGradient(phaseRuns);
-  timelineSide.style.background  = hardStopGradient(sideRuns);
-  timelineEl.classList.add('visible');
-}
-
-function hideTimeline() {
-  timelineEl.classList.remove('visible');
-  timelinePhase.style.background = '';
-  timelineSide.style.background  = '';
-}
-
-function hideRecap() {
-  hideTimeline();
-  recapEl.classList.remove('visible');
-  recapTable.innerHTML = '';
-  recapTitle.textContent = '';
-  recapStatsTable.innerHTML = '';
-  recapStatsTitle.textContent = '';
-  recapRowTimes = [];
-  recapTrEls = [];
-  currentRowIdx = -1;
+function aimSunLight() {
+  earth.getWorldQuaternion(earthWorldQ);
+  sun.position.copy(sunLocalNow).applyQuaternion(earthWorldQ).multiplyScalar(50);
 }
 
 function updateFlightFrame(t: number) {
   if (!flight || !planeMesh) return;
-  const utcMs = flight.depUtcMs + t * flight.durationMs;
+  aimSunLight();
+  if (t === lastFrameT) return;   // paused: skip the math and DOM writes
+  lastFrameT = t;
 
-  // Plane position & heading (Earth-local frame, unit vectors).
-  const { pos, heading } = planeAt(flight, t);
-  planeMesh.position.copy(pos).multiplyScalar(EARTH_RADIUS * PATH_LIFT);
-  planeMesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), heading);
+  const s = flightSampleAt(flight, t);
+  sunLocalNow.copy(s.sunLocal);
+  aimSunLight();
 
-  // Sun direction in Earth-local frame, then transformed to world for the light.
-  const sub = subsolarPoint(utcMs);
-  const sunLocal  = latLonToVec3(sub.lat, sub.lon, 1);
-  const sunWorld  = sunLocal.clone().applyQuaternion(earth.getWorldQuaternion(new THREE.Quaternion()));
-  sun.position.copy(sunWorld).multiplyScalar(50);
+  // Plane mesh: position & heading in Earth-local frame.
+  planeMesh.position.copy(s.pos).multiplyScalar(EARTH_RADIUS * PATH_LIFT);
+  planeMesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), s.heading);
 
-  // Sun-side math — both vectors live in Earth-local so dot products are valid.
-  const up    = pos.clone();
-  const right = new THREE.Vector3().crossVectors(heading, up).normalize();
-  const sR = sunLocal.dot(right);
-  const sF = sunLocal.dot(heading);
-  const sU = sunLocal.dot(up);
+  updateRecapHighlight(s.utcMs);
+  updateSunViz(s.sR, s.sF, s.elevDeg);
 
-  // Plane lat/lon for the HUD (inverse of latLonToVec3).
-  const planeLat = THREE.MathUtils.radToDeg(Math.asin(pos.y));
-  const planeLon = THREE.MathUtils.radToDeg(Math.atan2(-pos.z, pos.x));
-  const elevDeg  = THREE.MathUtils.radToDeg(Math.asin(sU));
-
-  updateRecapHighlight(utcMs);
-  updateSunViz(sR, sF, elevDeg);
-
-  const utcStr = new Date(utcMs).toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+  const { lat: planeLat, lon: planeLon } = vec3ToLatLon(s.pos);
+  const utcStr = new Date(s.utcMs).toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
   const traveledKm  = t * flight.distanceKm;
   const remainingKm = flight.distanceKm - traveledKm;
   flightHud.textContent = [
-    `${utcStr}   ${(t * 100).toFixed(0)}%   [${daylightLabel(elevDeg)}]`,
-    `Plane: ${fmt(planeLat)}°, ${fmt(planeLon)}°   Sun elev: ${fmt(elevDeg, 0)}°`,
-    `${sideLabel(sR, sF)}   at ${formatClock(sR, sF)}`,
+    `${utcStr}   ${(t * 100).toFixed(0)}%   [${s.phase}]`,
+    `Plane: ${fmt(planeLat)}°, ${fmt(planeLon)}°   Sun elev: ${fmt(s.elevDeg, 0)}°`,
+    `${sideLabel(s.sR, s.sF)}   at ${formatClock(s.sR, s.sF)}`,
     `Speed: ${Math.round(flight.speedKmh)} km/h   ` +
       `${Math.round(traveledKm)} / ${Math.round(flight.distanceKm)} km   ` +
       `${Math.round(remainingKm)} km left`,
@@ -941,22 +498,6 @@ function collectWaypointCodes(): string[] {
   return codes;
 }
 
-// "America/New_York (UTC−4)" for the given local datetime in that zone.
-// Offset is evaluated *at the given datetime* so DST switches are reflected.
-function formatTzInfo(tz: string, localIso: string): string {
-  if (!tz) return '';
-  const dt = localIso
-    ? DateTime.fromISO(localIso, { zone: tz })
-    : DateTime.now().setZone(tz);
-  if (!dt.isValid) return tz;
-  const offMin = dt.offset;                              // minutes east of UTC
-  const sign = offMin >= 0 ? '+' : '−';
-  const h = Math.floor(Math.abs(offMin) / 60);
-  const m = Math.abs(offMin) % 60;
-  const offStr = m === 0 ? `${sign}${h}` : `${sign}${h}:${String(m).padStart(2, '0')}`;
-  return `${tz} (UTC${offStr})`;
-}
-
 let lastRouteFrom: Airport | null = null;
 let lastRouteTo:   Airport | null = null;
 
@@ -968,39 +509,6 @@ function refreshTzInfo() {
 // ─── End-time mode (Datetime ↔ Duration) ────────────────────────────────────
 
 let endMode: 'datetime' | 'duration' = 'datetime';
-
-// Accepts "11h 30m", "11:30", "11.5", "11h", "30m". Returns minutes or null.
-function parseDuration(raw: string): number | null {
-  const s = raw.trim().toLowerCase();
-  if (!s) return null;
-  let m;
-  if ((m = s.match(/^(\d+):(\d{1,2})$/)))
-    return Number(m[1]) * 60 + Number(m[2]);
-  if ((m = s.match(/^(?:(\d+(?:\.\d+)?)\s*h)?\s*(?:(\d+)\s*m(?:in)?)?$/)) && (m[1] || m[2]))
-    return Math.round((m[1] ? parseFloat(m[1]) : 0) * 60 + (m[2] ? parseInt(m[2]) : 0));
-  if ((m = s.match(/^(\d+(?:\.\d+)?)$/)))
-    return Math.round(parseFloat(m[1]) * 60);
-  return null;
-}
-
-function formatDuration(min: number): string {
-  if (!Number.isFinite(min) || min < 0) return '';
-  return `${Math.floor(min / 60)}h ${min % 60}m`;
-}
-
-// arr_local (in toTz) = dep_local (in fromTz) + duration
-function durationToArrIso(depIso: string, fromTz: string, durMin: number, toTz: string): string {
-  const dep = DateTime.fromISO(depIso, { zone: fromTz });
-  if (!dep.isValid) return '';
-  return dep.plus({ minutes: durMin }).setZone(toTz).toFormat("yyyy-LL-dd'T'HH:mm");
-}
-
-function arrIsoToDurationMin(depIso: string, fromTz: string, arrIso: string, toTz: string): number | null {
-  const dep = DateTime.fromISO(depIso, { zone: fromTz });
-  const arr = DateTime.fromISO(arrIso, { zone: toTz });
-  if (!dep.isValid || !arr.isValid) return null;
-  return Math.round(arr.diff(dep, 'minutes').minutes);
-}
 
 // In Duration mode, the arrival datetime input is computed from
 // dep + duration. Keeps inArr.value in sync so Play / setFlight see correct ISO.
@@ -1308,7 +816,6 @@ function renderPresets() {
   }
 }
 
-airports = airportsData as Record<string, Airport>;
 setupAirportAutocomplete(inFrom, () => inTo.focus());
 setupAirportAutocomplete(inTo,   () => inDep.focus());
 

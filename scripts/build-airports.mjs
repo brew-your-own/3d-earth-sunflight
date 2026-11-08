@@ -1,4 +1,4 @@
-// One-off build step: airports/airports.csv (OurAirports dump) → public/airports.json
+// One-off build step: airports/airports.csv (OurAirports dump) → src/airports.json
 // Run with: node scripts/build-airports.mjs
 import fs from 'node:fs';
 import path from 'node:path';
@@ -44,13 +44,20 @@ const I_LON     = idx('longitude_deg');
 const I_COUNTRY = idx('iso_country');
 const I_CITY    = idx('municipality');
 const I_TYPE    = idx('type');
+const I_SCHED   = idx('scheduled_service');
+
+// Search tiebreaker: size tier ×2, +1 for scheduled passenger service.
+// Heliports, seaplane bases, balloonports and closed fields are dropped —
+// nobody flies a long-haul route to them.
+const SIZE = { large_airport: 3, medium_airport: 2, small_airport: 1 };
 
 const result = {};
 for (const line of lines) {
   const f = parseCsvLine(line);
   const iata = f[I_IATA];
   if (!iata || iata.length !== 3) continue;
-  if (f[I_TYPE] === 'closed') continue;
+  const size = SIZE[f[I_TYPE]];
+  if (!size) continue;
   const lat = Number(f[I_LAT]);
   const lon = Number(f[I_LON]);
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
@@ -63,6 +70,7 @@ for (const line of lines) {
     country: f[I_COUNTRY],
     city: f[I_CITY],
     tz,
+    rank: size * 2 + (f[I_SCHED] === 'yes' ? 1 : 0),
   };
 }
 

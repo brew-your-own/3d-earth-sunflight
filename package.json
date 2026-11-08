@@ -6,7 +6,9 @@
     "dev": "vite --host",
     "build": "tsc && vite build",
     "package": "tsc && vite build --mode singlefile",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run",
+    "typecheck": "tsc"
   },
   "dependencies": {
     "luxon": "^3.7.2",
@@ -18,6 +20,7 @@
     "typescript": "^5.7.2",
     "tz-lookup": "^6.1.25",
     "vite": "^6.3.2",
-    "vite-plugin-singlefile": "^2.3.3"
+    "vite-plugin-singlefile": "^2.3.3",
+    "vitest": "^3.2.7"
   }
 }
