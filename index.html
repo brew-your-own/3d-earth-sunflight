@@ -314,6 +314,23 @@
         background: #2b2e33;
       }
       #window-view.cockpit .window-label { color: #9aa3ad; bottom: 10px; }
+      /* [F] full screen: the view fills the viewport (panels stay on top). */
+      #window-view.full {
+        right: 0; bottom: 0; width: 100vw; height: 100vh; height: 100dvh;
+        aspect-ratio: auto; border-radius: 0;
+      }
+      #window-view.full .window-glass {
+        inset: 6vh 22vw 10vh;
+        /* the wall (a box-shadow) must now reach the screen edges */
+        box-shadow: 0 0 0 200vmax #d9d3c5, 0 0 0 6px #bdb6a6, inset 0 0 30px rgba(0, 0, 0, 0.55);
+      }
+      #window-view.full.cockpit .window-glass {
+        inset: 3vh 2.5vw 9vh;
+        border-radius: 18% 18% 5% 5% / 30% 30% 8% 8%;
+        box-shadow: 0 0 0 200vmax #2b2e33, 0 0 0 4px #44484f, inset 0 0 30px rgba(0, 0, 0, 0.5);
+      }
+      #window-view.full.cockpit .window-glass::after { left: calc(50% - 9px); width: 18px; }
+      #window-view.full .window-label { font-size: 13px; bottom: 3vh; }
       @media (max-width: 759px) {
         #window-view { bottom: 64px; }   /* clear the route bar on a phone */
       }

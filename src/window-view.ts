@@ -29,6 +29,7 @@ export type ViewSeat = Side | 'COCKPIT';
 const WINDOW_FOV_DEG  = 60;
 const COCKPIT_FOV_DEG = 70;       // vertical; the cockpit inset is wide (16:9)
 const COCKPIT_PITCH_DEG = -4;     // horizon a little above centre
+const COCKPIT_MAX_HFOV_DEG = 100;
 const LOOK_DOWN_DEG = 10;         // passengers look a little below level
 const MAX_LEAN_DEG  = 55;         // how far fore/aft of straight-out you can see by leaning
 const LEAN_RATE     = 2.5;        // 1/s — easing toward the sun (≈1 s to settle)
@@ -266,7 +267,11 @@ export function createWindowView(d: WindowViewDeps) {
       .multiplyScalar(Math.cos(pitch)).addScaledVector(up, Math.sin(pitch)).add(camPos);
     camera.lookAt(look);
     camera.aspect = rect.width / rect.height;
-    camera.fov = side === 'COCKPIT' ? COCKPIT_FOV_DEG : WINDOW_FOV_DEG;
+    // Cockpit: 70° vertical, but cap the horizontal at 100° so a very wide
+    // (full-screen) view doesn't turn into a stretched fisheye at the edges.
+    const vFromH = (hDeg: number) =>
+      2 * THREE.MathUtils.radToDeg(Math.atan(Math.tan(THREE.MathUtils.degToRad(hDeg / 2)) / camera.aspect));
+    camera.fov = side === 'COCKPIT' ? Math.min(COCKPIT_FOV_DEG, vFromH(COCKPIT_MAX_HFOV_DEG)) : WINDOW_FOV_DEG;
     // Near plane scales with height above ground: at 100 m the ground is
     // ~0.6 km away along the view; at cruise ~60 km. Far stays at 1000 for
     // the stars (nothing out there to z-fight).

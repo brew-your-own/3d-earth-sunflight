@@ -165,8 +165,13 @@ const stars = new THREE.Mesh(
   new THREE.SphereGeometry(500, 64, 64),
   // fog: false — the window view turns scene fog on, and the stars sit far
   // beyond its range; they should fade by sky brightness, not by distance.
-  new THREE.MeshBasicMaterial({ map: starsMap, side: THREE.BackSide, fog: false })
+  new THREE.MeshBasicMaterial({ map: starsMap, side: THREE.BackSide, fog: false, depthWrite: false })
 );
+// Background at infinity: drawn first and never writes depth, so nothing can
+// lose a depth test to it. Near the ground the window camera's near plane is
+// tiny, and at ~400 units the window-view sky dome and this sphere would
+// otherwise z-fight (black triangle shards across the sky).
+stars.renderOrder = -10;
 scene.add(stars);
 
 // ─── Earth ───────────────────────────────────────────────────────────────────
@@ -865,6 +870,7 @@ let cloudsOn = true;
 let nightOn  = true;
 let liveOn   = false;
 let windowSide: ViewSeat | null = null;   // window / cockpit view: null = off
+let windowFull = false;                   // [F]: that view fills the screen
 let liveLoading = false;  // a GIBS request is in flight; ignore repeat presses
 let liveDateLabel = '';  // YYYY-MM-DD currently displayed when live is on
 
@@ -882,6 +888,7 @@ function refreshHud() {
     `<span class="hud-cmd" data-key="l">[L] live satellite: <b>${liveLoading ? 'loading…' : liveOn ? `on (${liveDateLabel})` : 'off'}</b></span><br>` +
     `<span class="hud-cmd" data-key="m">[M] control mode: <b>${controlMode}</b></span><br>` +
     `<span class="hud-cmd" data-key="w">[W] window view: <b>${windowSide ? windowSide.toLowerCase() : 'off'}</b></span><br>` +
+    `<span class="hud-cmd" data-key="f">[F] full-screen view: <b>${windowFull ? 'on' : 'off'}</b></span><br>` +
     `<span class="hud-cmd" data-key="t">[T] twilight bands: <b>${twilightOn ? 'on' : 'off'}</b></span><br>` +
     `<span class="hud-cmd" data-key=" ">[Space] play/pause</span><br>` +
     `<span class="hud-cmd" data-key="g">[G] center on your location (Barcelona fallback)</span>`;
@@ -1019,7 +1026,6 @@ const hudActions: Record<string, () => void> = {
   l: () => { setLive(!liveOn); },
   g: () => { goToUserLocation(); },
   m: () => { controlMode = (controlMode === 'orbit') ? 'globe' : 'orbit'; applyControlMode(); refreshHud(); },
-  // off → left → right → off
   // off → left window → right window → cockpit → off
   w: () => { setWindowSide(windowSide === null ? 'LEFT' : windowSide === 'LEFT' ? 'RIGHT' : windowSide === 'RIGHT' ? 'COCKPIT' : null); },
   t: () => {
@@ -1028,6 +1034,9 @@ const hudActions: Record<string, () => void> = {
     twilightLegend?.classList.toggle('hidden', !twilightOn);
     refreshHud();
   },
+  // Full screen: expands whichever view is on (turns the cockpit on if none).
+  f: () => { setWindowFull(!windowFull); },
+  escape: () => { if (windowFull) setWindowFull(false); },
   ' ': () => { playBtn.click(); },
 };
 
@@ -1063,12 +1072,25 @@ const windowLabel = windowEl.querySelector('.window-label') as HTMLDivElement;
 
 function setWindowSide(side: ViewSeat | null) {
   windowSide = side;
+  if (!side && windowFull) { setWindowFull(false); return; }
   windowEl.classList.toggle('cockpit', side === 'COCKPIT');
   if (side === 'COCKPIT') windowLabel.textContent = 'cockpit · [W]';
   else if (side) windowLabel.textContent = `${side.toLowerCase()} window (${SEAT_LETTERS[side]}) · [W]`;
+  if (side) windowLabel.textContent += windowFull ? ' · [F]/Esc exit full screen' : ' · [F] full screen';
   invalidate();
   refreshHud();
 }
+
+function setWindowFull(on: boolean) {
+  windowFull = on;
+  windowEl.classList.toggle('full', on);
+  if (on && windowSide === null) windowSide = 'COCKPIT';
+  if (!on && windowSide === null) { refreshHud(); return; }
+  setWindowSide(windowSide);   // refresh label, classes, HUD, redraw
+}
+
+// Is the full-screen view actually covering the globe right now?
+const fullViewShown = () => windowFull && windowSide !== null && flight !== null && currentSample !== null;
 
 // Returns true while the window view is still easing toward its target.
 function renderWindowView(): boolean {
@@ -1195,7 +1217,8 @@ function animate() {
   terminator.setSunPosition(sun.position);
   atmosphere.setSunPosition(sun.position);
   plane.fitToScreen(camera, window.innerHeight);   // constant on-screen size
-  renderer.render(scene, camera);
+  // The full-screen view covers the whole canvas: skip the globe render.
+  if (!fullViewShown()) renderer.render(scene, camera);
   if (renderWindowView()) needsRender = true;
 }
 
