@@ -1,4 +1,6 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from 'vite';
+import { configDefaults } from 'vitest/config';
 import { viteSingleFile } from 'vite-plugin-singlefile';
 import { execSync } from 'node:child_process';
 
@@ -18,6 +20,11 @@ export default defineConfig(({ mode }) => {
     plugins: single ? [viteSingleFile()] : [],
     define: {
       __GIT_REV__: JSON.stringify(gitRev()),
+    },
+    test: {
+      // Agent git worktrees live under .claude/worktrees and carry their own
+      // copies of src/*.test.ts — don't run those as part of this checkout.
+      exclude: [...configDefaults.exclude, '.claude/**'],
     },
     server: {
       // Allow reaching the dev server from the LAN via the laptop's mDNS
