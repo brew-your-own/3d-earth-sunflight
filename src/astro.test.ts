@@ -57,3 +57,29 @@ describe('cruise-altitude day/night thresholds', () => {
     expect(daylightLabel(-60)).toBe('NIGHT');
   });
 });
+
+describe('altitude-dependent horizon', () => {
+  it('reduces to standard sunrise (-0.833°) on the ground', async () => {
+    const { sunriseElevDeg, horizonDipDeg } = await import('./astro');
+    expect(horizonDipDeg(0)).toBe(0);
+    expect(sunriseElevDeg(0)).toBeCloseTo(-0.833, 9);
+    expect(sunriseElevDeg(5)).toBeLessThan(-0.833);
+    expect(sunriseElevDeg(5)).toBeGreaterThan(SUNRISE_ELEV_DEG);
+  });
+
+  it('classifies by altitude', () => {
+    expect(daylightLabel(-3, 11)).toBe('DAY');
+    expect(daylightLabel(-3, 0)).toBe('TWILIGHT');
+    expect(daylightLabel(-7, 0)).toBe('NIGHT');
+  });
+
+  it('follows a trapezoid climb/cruise/descent profile', async () => {
+    const { altitudeKm, CLIMB_MIN, DESCENT_MIN, CRUISE_ALT_KM } = await import('./astro');
+    expect(altitudeKm(0, 600)).toBe(0);
+    expect(altitudeKm(CLIMB_MIN / 2, 600)).toBeCloseTo(CRUISE_ALT_KM / 2, 9);
+    expect(altitudeKm(300, 300)).toBe(CRUISE_ALT_KM);
+    expect(altitudeKm(600, DESCENT_MIN / 2)).toBeCloseTo(CRUISE_ALT_KM / 2, 9);
+    // 30-minute hop never reaches cruise: ramps meet at 12 min (12/20 = 18/30 = 0.6).
+    expect(altitudeKm(12, 18)).toBeCloseTo(0.6 * CRUISE_ALT_KM, 9);
+  });
+});

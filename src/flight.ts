@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import { DateTime } from 'luxon';
 import type { Airport } from './airports';
 import { EARTH_RADIUS_KM, type Arc, arcHeading, arcPoint, latLonToVec3, makeArc } from './geo';
-import { type Phase, daylightLabel, subsolarPoint } from './astro';
+import { type Phase, altitudeKm, daylightLabel, subsolarPoint } from './astro';
 
 // One great-circle leg between two consecutive route points. tStart..tEnd is
 // the segment's slice of overall progress (t ∈ [0,1]) — split proportional to
@@ -97,7 +97,8 @@ export type FlightSample = {
   utcMs: number;
   pos: THREE.Vector3; heading: THREE.Vector3; sunLocal: THREE.Vector3;
   sR: number; sF: number; sU: number;   // sun · (right, forward, up)
-  elevDeg: number; phase: Phase; side: Side;
+  altKm: number;                         // from the climb/cruise/descent profile
+  elevDeg: number; phase: Phase; side: Side;   // side: raw sign of sR (no dead band)
 };
 
 // Everything derived from one moment of the flight. Shared by the per-frame
@@ -113,14 +114,27 @@ export function flightSampleAt(f: Flight, t: number): FlightSample {
   const sF = sunLocal.dot(heading);
   const sU = sunLocal.dot(up);
   const elevDeg = THREE.MathUtils.radToDeg(Math.asin(THREE.MathUtils.clamp(sU, -1, 1)));
+  const durMin = f.durationMs / 60_000;
+  const altKm = altitudeKm(t * durMin, (1 - t) * durMin);
   return {
-    utcMs, pos, heading, sunLocal, sR, sF, sU, elevDeg,
-    phase: daylightLabel(elevDeg),
+    utcMs, pos, heading, sunLocal, sR, sF, sU, altKm, elevDeg,
+    phase: daylightLabel(elevDeg, altKm),
     side: sR > 0 ? 'RIGHT' : 'LEFT',
   };
 }
 
 // ─── Recap scan ──────────────────────────────────────────────────────────────
+
+// Sun-side hysteresis. When the sun is nearly dead ahead/behind, or nearly
+// overhead, sR hovers around 0 and its sign flickers; a raw sign test would
+// spam "Sun → LEFT / Sun → RIGHT" rows. The side only switches once the sun is
+// clearly across: |sR| > 0.05 (≈ 3° off the nose/tail axis at the horizon).
+export const SIDE_DEADBAND = 0.05;
+
+export function sideAfter(current: Side, sR: number, deadband = SIDE_DEADBAND): Side {
+  if (current === 'RIGHT') return sR < -deadband ? 'LEFT' : 'RIGHT';
+  return sR > deadband ? 'RIGHT' : 'LEFT';
+}
 
 export type RecapRow = {
   utcMs: number; phase: Phase; label: string;
@@ -162,21 +176,24 @@ export function computeRecap(f: Flight, N = 2000): { rows: RecapRow[]; stats: Re
   let prevPhase = first.phase;
   let prevSide  = first.side;
   for (let i = 1; i <= N; i++) {
-    const s = flightSampleAt(f, i / N);
+    const raw  = flightSampleAt(f, i / N);
+    const side = sideAfter(prevSide, raw.sR);
+    const s    = { ...raw, side };
     tally(s);
     const tA = (i - 1) / N, tB = i / N;
     if (s.phase !== prevPhase) {
       const pp = prevPhase;
       const r = refineTransition(f, tA, tB, (x) => x.phase === pp);
-      const extra = s.phase === 'DAY' ? `, sun on the ${r.side}` : '';
-      rows.push({ utcMs: r.utcMs, phase: s.phase, kind: 'phase', side: r.side, label: `→ ${s.phase}${extra}` });
-    } else if (s.phase === 'DAY' && s.side !== prevSide) {
+      const rSide = sideAfter(prevSide, r.sR);
+      const extra = s.phase === 'DAY' ? `, sun on the ${rSide}` : '';
+      rows.push({ utcMs: r.utcMs, phase: s.phase, kind: 'phase', side: rSide, label: `→ ${s.phase}${extra}` });
+    } else if (s.phase === 'DAY' && side !== prevSide) {
       const ps = prevSide;
-      const r = refineTransition(f, tA, tB, (x) => x.side === ps);
-      rows.push({ utcMs: r.utcMs, phase: 'DAY', kind: 'side', side: s.side, label: `Sun → ${s.side}` });
+      const r = refineTransition(f, tA, tB, (x) => sideAfter(ps, x.sR) === ps);
+      rows.push({ utcMs: r.utcMs, phase: 'DAY', kind: 'side', side, label: `Sun → ${side}` });
     }
     prevPhase = s.phase;
-    prevSide  = s.side;
+    prevSide  = side;
   }
 
   rows.push({

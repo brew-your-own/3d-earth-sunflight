@@ -452,7 +452,7 @@ function updateFlightFrame(t: number) {
   planeMesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), s.heading);
 
   updateRecapHighlight(s.utcMs);
-  updateSunViz(s.sR, s.sF, s.elevDeg);
+  updateSunViz(s.sR, s.sF, s.phase !== 'NIGHT');
 
   const { lat: planeLat, lon: planeLon } = vec3ToLatLon(s.pos);
   const utcStr = new Date(s.utcMs).toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
@@ -460,7 +460,7 @@ function updateFlightFrame(t: number) {
   const remainingKm = flight.distanceKm - traveledKm;
   flightHud.textContent = [
     `${utcStr}   ${(t * 100).toFixed(0)}%   [${s.phase}]`,
-    `Plane: ${fmt(planeLat)}°, ${fmt(planeLon)}°   Sun elev: ${fmt(s.elevDeg, 0)}°`,
+    `Plane: ${fmt(planeLat)}°, ${fmt(planeLon)}°   Alt: ${fmt(s.altKm)} km   Sun elev: ${fmt(s.elevDeg, 0)}°`,
     `${sideLabel(s.sR, s.sF)}   at ${formatClock(s.sR, s.sF)}`,
     `Speed: ${Math.round(flight.speedKmh)} km/h   ` +
       `${Math.round(traveledKm)} / ${Math.round(flight.distanceKm)} km   ` +
@@ -887,6 +887,7 @@ function centerOn(lat: number, lon: number) {
   camera.up.copy(wy);
   camera.position.copy(wp).multiplyScalar(dist);
   controls.update();
+  invalidate();   // may run from an async geolocation callback, not user input
 }
 
 // Barcelona-El Prat airport (BCN). Used as fallback when the browser doesn't
@@ -1047,13 +1048,14 @@ function setWindowSide(side: Side | null) {
   refreshHud();
 }
 
-function renderWindowView() {
+// Returns true while the window view is still easing toward its target.
+function renderWindowView(): boolean {
   const show = windowSide !== null && flight !== null && currentSample !== null;
   windowEl.classList.toggle('visible', show);
-  if (!show) return;
+  if (!show) return false;
   const rect = windowEl.getBoundingClientRect();
-  if (rect.width < 1 || rect.height < 1) return;
-  windowView.render(currentSample!, windowSide!, rect, [currentRoute, planeMesh]);
+  if (rect.width < 1 || rect.height < 1) return false;
+  return windowView.render(currentSample!, windowSide!, rect, [currentRoute, planeMesh]);
 }
 
 // Seat advice click: jump to that sunrise/sunset (paused) and look out the
@@ -1091,13 +1093,42 @@ if (window.innerWidth < PANEL_NARROW_PX) {
   for (const p of panelEls) p.classList.add('collapsed');
 }
 
-// ─── Resize ──────────────────────────────────────────────────────────────────
+// ─── Resize & pixel density ──────────────────────────────────────────────────
 
-window.addEventListener('resize', () => {
+function applyRendererSize() {
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
-});
+  invalidate();
+}
+window.addEventListener('resize', applyRendererSize);
+
+// Dragging the window to a screen with a different devicePixelRatio fires no
+// resize event (CSS size is unchanged). A resolution media query matching the
+// *current* DPR flips when it changes; re-arm it for the new value each time.
+function watchPixelRatio() {
+  const mq = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+  mq.addEventListener('change', () => { applyRendererSize(); watchPixelRatio(); }, { once: true });
+}
+watchPixelRatio();
+
+// ─── Render on demand ────────────────────────────────────────────────────────
+// The loop still ticks every animation frame, but only renders when something
+// can have changed: playback, the idle spin, camera damping, the window view
+// easing, or an explicit invalidate(). With a paused flight and no input the
+// GPU sits idle. Rather than sprinkling invalidate() over every handler, any
+// user input on the page invalidates (handlers run before the next frame), and
+// so does every finished texture load (startup maps, live satellite).
+
+let needsRender = true;
+function invalidate() { needsRender = true; }
+
+for (const type of ['pointerdown', 'pointermove', 'pointerup', 'wheel', 'keydown', 'input', 'click', 'touchmove']) {
+  window.addEventListener(type, invalidate, { capture: true, passive: true });
+}
+THREE.DefaultLoadingManager.onProgress = invalidate;
+THREE.DefaultLoadingManager.onLoad = invalidate;
 
 // ─── Animation loop ──────────────────────────────────────────────────────────
 
@@ -1107,16 +1138,20 @@ function animate() {
   requestAnimationFrame(animate);
 
   const dt = clock.getDelta();
+  let dirty = needsRender;
+  needsRender = false;
 
   if (flight) {
     if (playing) {
       progress = Math.min(1, progress + dt / PLAY_WALL_SECONDS);
       scrubEl.value = String(Math.round(progress * 1000));
       if (progress >= 1) { playing = false; updatePlayBtn(); }
+      // Clouds drift subtly during playback for visual life (frozen when
+      // paused, so a paused scene is truly static).
+      clouds.rotateY(dt * 0.01);
+      dirty = true;
     }
     updateFlightFrame(progress);
-    // Clouds keep drifting subtly even during playback for visual life.
-    clouds.rotateY(dt * 0.01);
   } else if (controlMode === 'orbit') {
     // Idle: slow Earth spin, fixed sun from Phase 1.
     // Suspended in 'globe' mode so user drags aren't fought by the spin.
@@ -1125,11 +1160,15 @@ function animate() {
     // make the pole precess in a cone instead of spinning around itself.
     earth.rotateY(dt * 0.05);
     clouds.rotateY(dt * 0.065);
+    dirty = true;
   }
 
-  controls.update();
+  // update() returns true while the camera is still moving (incl. damping).
+  if (controls.update()) dirty = true;
+  if (!dirty) return;
+
   renderer.render(scene, camera);
-  renderWindowView();
+  if (renderWindowView()) needsRender = true;
 }
 
 animate();

@@ -9,10 +9,12 @@
 //     and the sun setting behind the curve come out of the real geometry.
 //   - scene fog, enabled only for this render, as aerial-perspective haze.
 //   - the cloud shell, temporarily shrunk to ~6 km so it sits *below* the
-//     plane (normally it floats at 1.01 R ≈ 64 km, above cruise altitude).
+//     plane (normally it floats at 1.01 R ≈ 64 km, above cruise altitude);
+//     below 6 km (climb/descent) it's overhead and back-face culled.
+//   - the camera height follows the sample's climb/cruise/descent altitude.
 //   - the route line, labels and plane cone hidden (they live at 1.02 R).
 import * as THREE from 'three';
-import { CRUISE_ALT_KM, NIGHT_ELEV_DEG } from './astro';
+
 import { EARTH_RADIUS_KM } from './geo';
 import type { FlightSample, Side } from './flight';
 
@@ -105,7 +107,6 @@ export function createWindowView(d: WindowViewDeps) {
   const q = new THREE.Quaternion();
   const up = new THREE.Vector3(), fwd = new THREE.Vector3(), right = new THREE.Vector3();
   const look = new THREE.Vector3(), sunWorld = new THREE.Vector3(), camPos = new THREE.Vector3();
-  const altFactor   = 1 + CRUISE_ALT_KM / EARTH_RADIUS_KM;
   const cloudScale  = (1 + CLOUD_ALT_KM / EARTH_RADIUS_KM) / d.cloudRadiusFactor;
   const dip = THREE.MathUtils.degToRad(LOOK_DOWN_DEG);
 
@@ -113,6 +114,7 @@ export function createWindowView(d: WindowViewDeps) {
   // side, turn toward it (within ±MAX_LEAN_DEG of straight out); otherwise
   // look straight out. Eased so jumps and side switches don't snap.
   let leanDeg = 0;
+  let leanSettled = true;
   let lastMs = performance.now();
   function updateLean(s: FlightSample, side: Side): number {
     const now = performance.now();
@@ -121,15 +123,17 @@ export function createWindowView(d: WindowViewDeps) {
     const abeam = side === 'LEFT' ? -90 : 90;
     const relAz = THREE.MathUtils.radToDeg(Math.atan2(s.sR, s.sF));   // 0 ahead, +90 right
     const off = ((relAz - abeam + 540) % 360) - 180;                  // sun bearing vs straight-out
-    const target = s.elevDeg > NIGHT_ELEV_DEG && Math.abs(off) < 120
+    const target = s.phase !== 'NIGHT' && Math.abs(off) < 120
       ? THREE.MathUtils.clamp(off, -MAX_LEAN_DEG, MAX_LEAN_DEG)
       : 0;
     leanDeg += (target - leanDeg) * (1 - Math.exp(-LEAN_RATE * dt));
+    leanSettled = Math.abs(target - leanDeg) < 0.05;
     return abeam + leanDeg;
   }
 
   // `hidden`: objects that would float in the sky from this altitude.
-  function render(s: FlightSample, side: Side, rect: DOMRect, hidden: Array<THREE.Object3D | null>) {
+  // Returns true while the view is still easing (caller should keep drawing).
+  function render(s: FlightSample, side: Side, rect: DOMRect, hidden: Array<THREE.Object3D | null>): boolean {
     const { renderer, scene, earth, clouds, earthRadius } = d;
     earth.getWorldQuaternion(q);
     up.copy(s.pos).applyQuaternion(q);
@@ -137,7 +141,9 @@ export function createWindowView(d: WindowViewDeps) {
     right.crossVectors(fwd, up).normalize();
     sunWorld.copy(s.sunLocal).applyQuaternion(q).normalize();
 
-    camPos.copy(s.pos).multiplyScalar(earthRadius * altFactor);
+    // Keep at least ~100 m up so the camera never sits inside the sphere.
+    const altKm = Math.max(0.1, s.altKm);
+    camPos.copy(s.pos).multiplyScalar(earthRadius * (1 + altKm / EARTH_RADIUS_KM));
     earth.localToWorld(camPos);
     camera.position.copy(camPos);
     camera.up.copy(up);
@@ -147,6 +153,10 @@ export function createWindowView(d: WindowViewDeps) {
       .multiplyScalar(Math.cos(dip)).addScaledVector(up, -Math.sin(dip)).add(camPos);
     camera.lookAt(look);
     camera.aspect = rect.width / rect.height;
+    // Near plane scales with height above ground: at 100 m the ground is
+    // ~0.6 km away along the view; at cruise ~60 km. Far stays at 1000 for
+    // the stars (nothing out there to z-fight).
+    camera.near = THREE.MathUtils.clamp(altKm / EARTH_RADIUS_KM * earthRadius * 0.2, 2e-6, 5e-4);
     camera.updateProjectionMatrix();
 
     sky.position.copy(camPos);
@@ -174,6 +184,7 @@ export function createWindowView(d: WindowViewDeps) {
     clouds.scale.setScalar(cloudScaleBefore);
     hidden.forEach((o, i) => { if (o) o.visible = wasVisible[i]; });
     fog.near = NO_FOG.near; fog.far = NO_FOG.far;
+    return !leanSettled;
   }
 
   return { render };

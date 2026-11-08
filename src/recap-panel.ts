@@ -2,7 +2,7 @@
 // diagram, plus the phase timeline strip under the scrubber. DOM only — the
 // numbers come from flight.ts.
 import { DateTime } from 'luxon';
-import { CRUISE_ALT_KM, NIGHT_ELEV_DEG, SUNRISE_ELEV_DEG } from './astro';
+import { CLIMB_MIN, CRUISE_ALT_KM, DESCENT_MIN, SUNRISE_ELEV_DEG } from './astro';
 import { type Flight, type RecapRow, type Side, computeRecap } from './flight';
 import { SEAT_LETTERS, type SeatAdvice, type ViewAngle, seatAdvice } from './seat';
 
@@ -91,7 +91,8 @@ export function renderRecap(f: Flight) {
       `<span class="side-LEFT">${pct(stats.leftPct)} ←</span> Sun <span class="side-RIGHT">→ ${pct(stats.rightPct)}</span></td></tr>`,
     `<tr class="phase-TWILIGHT"><td class="label">Twilight</td><td class="pct">${pct(stats.twilightPct)}</td></tr>`,
     `<tr class="phase-NIGHT"><td class="label">Night</td><td class="pct">${pct(stats.nightPct)}</td></tr>`,
-    `<tr><td colspan="2" class="footnote">Sunrise/sunset at ${CRUISE_ALT_KM} km cruise: sun elev ${SUNRISE_ELEV_DEG.toFixed(1)}°</td></tr>`,
+    `<tr><td colspan="2" class="footnote">Sunrise/sunset at ${CRUISE_ALT_KM} km cruise: sun elev ${SUNRISE_ELEV_DEG.toFixed(1)}°` +
+      ` (−0.8° on the ground; ${CLIMB_MIN}-min climb, ${DESCENT_MIN}-min descent)</td></tr>`,
   ].join('');
   renderTimeline(f, rows);
   recapEl.classList.add('visible');
@@ -134,11 +135,11 @@ export function hideRecap() {
 // (-y in SVG), so:
 //   sun ahead (sF > 0, sR = 0) → top of viz
 //   sun right (sR > 0, sF = 0) → right of viz
-// Hidden during NIGHT.
+// Hidden during NIGHT (phase already accounts for the plane's altitude).
 const SUN_VIZ_RADIUS = 82;
-export function updateSunViz(sR: number, sF: number, elevDeg: number) {
+export function updateSunViz(sR: number, sF: number, visible: boolean) {
   if (!sunIcon) return;
-  if (elevDeg < NIGHT_ELEV_DEG) {
+  if (!visible) {
     sunIcon.classList.add('hidden');
     return;
   }

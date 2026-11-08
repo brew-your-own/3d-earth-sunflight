@@ -122,3 +122,48 @@ describe('computeRecap', () => {
     expect(stats.twilightPct + stats.nightPct).toBe(0);
   });
 });
+
+describe('sun-side dead band', () => {
+  it('only switches side once the sun is clearly across', async () => {
+    const { sideAfter, SIDE_DEADBAND } = await import('./flight');
+    expect(sideAfter('RIGHT', -0.01)).toBe('RIGHT');
+    expect(sideAfter('RIGHT', -SIDE_DEADBAND - 0.01)).toBe('LEFT');
+    expect(sideAfter('LEFT', 0.04)).toBe('LEFT');
+    expect(sideAfter('LEFT', 0.06)).toBe('RIGHT');
+  });
+
+  it('ignores a marginal crossing of the nose/tail axis', () => {
+    // SIN→NBO at the equinox: the sun grazes the tail axis once (raw sign
+    // flips) but never gets more than ~3° across it.
+    const f = flight('SIN', 'NBO', '2026-03-20T12:00', '2026-03-20T19:00');
+    let rawFlips = 0, prev: string | null = null;
+    for (let i = 0; i <= 4000; i++) {
+      const s = flightSampleAt(f, i / 4000);
+      if (s.phase !== 'DAY') { prev = null; continue; }
+      if (prev && s.side !== prev) rawFlips++;
+      prev = s.side;
+    }
+    expect(rawFlips).toBeGreaterThan(0);
+    expect(computeRecap(f).rows.filter((r) => r.kind === 'side')).toHaveLength(0);
+  });
+});
+
+describe('altitude profile in samples', () => {
+  it('is on the ground at both ends and at cruise in the middle', () => {
+    const f = flight('LHR', 'JFK', '2026-06-21T11:00', '2026-06-21T14:00');   // 8 h
+    expect(flightSampleAt(f, 0).altKm).toBe(0);
+    expect(flightSampleAt(f, 1).altKm).toBe(0);
+    expect(flightSampleAt(f, 0.5).altKm).toBe(11);
+    expect(flightSampleAt(f, 10 / 480).altKm).toBeCloseTo(5.5, 6);   // halfway up the 20-min climb
+  });
+
+  it('uses the ground horizon at the gate: a sun set before departure stays set', () => {
+    // JFK 17:00 on 8 Nov: sun is ~-3.7°. From cruise that would still be
+    // "DAY" (≥ -4.2°), but on the ground it's twilight.
+    const f = flight('JFK', 'LAX', '2026-11-08T17:00', '2026-11-08T20:00');
+    const s = flightSampleAt(f, 0);
+    expect(s.elevDeg).toBeLessThan(-0.833);
+    expect(s.elevDeg).toBeGreaterThan(-4.2);
+    expect(s.phase).toBe('TWILIGHT');
+  });
+});

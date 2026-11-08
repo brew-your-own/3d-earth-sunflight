@@ -25,7 +25,7 @@ describe('viewAngle', () => {
 
 describe('seatAdvice', () => {
   it('westbound evening in autumn: sunset ahead on the left', () => {
-    const a = advise(flight('JFK', 'LAX', '2026-11-08T17:00', '2026-11-08T20:00'));
+    const a = advise(flight('JFK', 'LAX', '2026-11-08T16:00', '2026-11-08T19:00'));
     expect(a.events).toHaveLength(1);
     expect(a.events[0]).toMatchObject({ kind: 'sunset', side: 'LEFT' });
     expect(a.events[0].relAzDeg).toBeLessThan(0);
@@ -45,6 +45,7 @@ describe('seatAdvice', () => {
   });
 
   it('no shade advice when there is barely any direct sun', () => {
+    // Sun already set at JFK (-3.7°) when the wheels leave the ground.
     const a = advise(flight('JFK', 'LAX', '2026-11-08T17:00', '2026-11-08T20:00'));
     expect(a.sunHours.LEFT + a.sunHours.RIGHT).toBeLessThan(1 / 6);
     expect(a.shadeSide).toBeNull();
