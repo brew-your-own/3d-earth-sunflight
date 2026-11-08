@@ -12,7 +12,45 @@ import planeModelUrl from './models/airplane.glb?url';
 // On-screen length of the plane, in CSS pixels, whatever the zoom.
 export const PLANE_SCREEN_PX = 46;
 
-export function createPlane() {
+// Top-down drawing of the model as SVG polygons (for the recap panel's
+// plane/sun diagram): nose up (−y), left wing on the left. Faces are shaded
+// by a light from above and drawn lowest-first so the wings cover the engines.
+// `model` must already be normalised (length 1, centred) and have normals.
+export function topViewSvg(model: THREE.Object3D, lengthPx: number, offsetY = 0): string {
+  const L = new THREE.Vector3(-0.3, 1, 0.45).normalize();
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
+  const n = new THREE.Vector3(), e1 = new THREE.Vector3(), e2 = new THREE.Vector3();
+  const tris: Array<{ y: number; svg: string }> = [];
+  model.updateMatrixWorld(true);
+  model.traverse((o) => {
+    if (!(o instanceof THREE.Mesh)) return;
+    const pos = o.geometry.getAttribute('position');
+    const base = (o.material as THREE.MeshStandardMaterial).color;
+    // Model +X is the left wing → SVG −x; nose +Z → SVG −y.
+    const pt = (v: THREE.Vector3) =>
+      `${(-v.x * lengthPx).toFixed(1)},${(-v.z * lengthPx + offsetY).toFixed(1)}`;
+    for (let i = 0; i + 2 < pos.count; i += 3) {
+      a.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld);
+      b.fromBufferAttribute(pos, i + 1).applyMatrix4(o.matrixWorld);
+      c.fromBufferAttribute(pos, i + 2).applyMatrix4(o.matrixWorld);
+      n.crossVectors(e1.subVectors(b, a), e2.subVectors(c, a));
+      if (Math.abs(n.y) * lengthPx * lengthPx < 0.02) continue;   // edge-on from above
+      n.normalize();
+      if (n.y < 0) n.negate();                                     // seen from above
+      const lum = 0.5 + 0.6 * Math.max(0, n.dot(L));
+      const fill = base.clone().multiplyScalar(lum).getHexString();
+      tris.push({
+        y: (a.y + b.y + c.y) / 3,
+        svg: `<polygon points="${pt(a)} ${pt(b)} ${pt(c)}" fill="#${fill}" stroke="#${fill}" stroke-width="0.4"/>`,
+      });
+    }
+  });
+  tris.sort((p, q) => p.y - q.y);
+  return tris.map((t) => t.svg).join('');
+}
+
+// onModel: called once with the loaded, normalised model (before it's added).
+export function createPlane(onModel?: (model: THREE.Object3D) => void) {
   const group = new THREE.Group();     // positioned + oriented by the caller
   const body  = new THREE.Group();     // model, normalised to length 1
   group.add(body);
@@ -46,6 +84,7 @@ export function createPlane() {
     const k = 1 / size.z;
     model.scale.setScalar(k);
     model.position.copy(centre).multiplyScalar(-k);
+    onModel?.(model);
 
     // Navigation lights at the wingtips: red on the left (+X), green right.
     const tipX = size.x * k / 2, tipZ = (box.min.z + 0.3 * size.z - centre.z) * k;

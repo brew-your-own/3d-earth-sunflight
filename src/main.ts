@@ -3,12 +3,12 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { type Airport, type Suggestion, airports, resolveAirportCode, searchAirports } from './airports';
 import { greatCirclePoints, latLonToVec3, vec3ToLatLon } from './geo';
 import { type Flight, type FlightSample, type Side, buildFlight, flightSampleAt } from './flight';
-import { hideRecap, onAdvicePick, renderRecap, updateRecapHighlight, updateSunViz } from './recap-panel';
+import { hideRecap, onAdvicePick, renderRecap, setPlaneDrawing, updateRecapHighlight, updateSunViz } from './recap-panel';
 import { SEAT_LETTERS } from './seat';
 import { type ViewSeat, createWindowView } from './window-view';
 import { TERMINATOR_LAYER, createTerminatorOverlay, legendHtml } from './terminator';
 import { moonVecER, topocentricMoonDir } from './moon';
-import { createPlane } from './plane-model';
+import { createPlane, topViewSvg } from './plane-model';
 import { ATMOSPHERE_LAYER, buildOceanRoughness, createAtmosphere, createRouteLineMaterial, makeRouteLine, patchNightLights } from './globe-visuals';
 import { arrIsoToDurationMin, durationToArrIso, formatDuration, formatTzInfo, parseDuration } from './time';
 
@@ -376,7 +376,7 @@ let playing  = false;
 const PLAY_WALL_SECONDS = 25;  // how long the whole flight takes on screen
 
 // Airliner model (plane-model.ts): created once, shown while a flight exists.
-const plane = createPlane();
+const plane = createPlane((model) => setPlaneDrawing(topViewSvg(model, 118, -3)));
 earth.add(plane.group);
 function ensurePlane() { plane.group.visible = true; }
 

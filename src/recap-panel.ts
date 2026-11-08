@@ -192,6 +192,21 @@ export function hideRecap() {
 //   sun right (sR > 0, sF = 0) → right of viz
 // Hidden during NIGHT (phase already accounts for the plane's altitude).
 const SUN_VIZ_RADIUS = 82;
+
+// Replace the outline drawing with the 3D model's top view (SVG polygons from
+// plane-model.ts), once the model has loaded. The outline stays as fallback.
+export function setPlaneDrawing(svgPolygons: string) {
+  const outline = recapEl.querySelector<SVGPathElement>('.sun-viz path.plane');
+  if (!outline) return;
+  let g = recapEl.querySelector<SVGGElement>('.sun-viz g.plane-model');
+  if (!g) {
+    g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    g.setAttribute('class', 'plane-model');
+    outline.after(g);
+  }
+  g.innerHTML = svgPolygons;
+  outline.style.display = 'none';
+}
 export function updateSunViz(sR: number, sF: number, visible: boolean) {
   if (!sunIcon) return;
   if (!visible) {
