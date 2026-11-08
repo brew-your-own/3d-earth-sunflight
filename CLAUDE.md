@@ -40,6 +40,7 @@ Pure modules (no DOM, no scene state — import freely from tests):
 - `src/astro.ts` — `subsolarPoint` (NOAA-derived, ~0.01°), cruise-altitude thresholds, `daylightLabel`
 - `src/flight.ts` — `buildFlight` (local times → UTC via each airport's tz, segments split by arc length, zero-length legs dropped), `planeAt`, `flightSampleAt` (sun right/forward/up components, elevation, phase, side — the single source of truth for both HUD and recap), `computeRecap` (2000-sample scan → rows + stats)
 - `src/airports.ts` — `Airport` type, the imported `airports` record, `searchAirports` (tiered match + rank tiebreak, lowercased index built lazily), `resolveAirportCode`
+- `src/aurora.ts` — geomagnetic latitude, aurora visibility tiers, `auroraWindows` (see the Aurora section)
 - `src/seat.ts` — `seatAdvice`: sunrise/sunset events (from recap rows) with window side + relative bearing, hours of direct sun per side (DAY and |sR| ≥ 0.25), shade recommendation; `SEAT_LETTERS` (A left, F/K right)
 - `src/time.ts` — `parseDuration`, `formatDuration`, dep+duration ↔ arrival across timezones, `formatTzInfo`
 
@@ -65,6 +66,13 @@ DOM / scene modules:
 - **Window view tricks** (all in `window-view.ts`): the sky dome is on layer 1 (main camera never sees it), `renderOrder = -1` so it draws before the transparent clouds, depth-tested so the Earth occludes it — the horizon dip and the sun sinking behind the curve come from real geometry. `scene.fog` always exists but sits at 1e6 except during the window render (avoids shader recompiles); the starfield has `fog: false`. The window camera's height follows `sample.altKm` (min 100 m) with a near plane scaled to it. During the window render the route group and plane cone are hidden (they float at 1.02 R ≈ 127 km) and the cloud shell is shrunk to ~6 km so it's below the plane. The camera "leans" toward the sun up to ±55° from straight-out; a sun closer to the nose/tail is genuinely out of view (advice says "oblique"). The sun disc is drawn ~1.2° radius (4× real) to be visible in the inset.
 - **Timeline strip** under the scrubber is built from the recap rows (`renderTimeline` in `recap-panel.ts`): top band = phase, bottom band = sun side during DAY (blue left / orange right, matching the recap stats).
 - **Three collapsible UI panels** — settings (top-left), route (bottom-left, with presets merged in), recap (top-right). Layout/CSS lives in `index.html`: each is a `.panel` whose body hides under a `.collapsed` class, toggled by one `.panel-toggle` button. The wiring in `main.ts` is tiny — click toggles `.collapsed`; on viewports < 760px panels start collapsed and opening one collapses the others. Same markup at every screen size (no separate mobile codepath); widths use `min(…, 100vw - 24px)` to cap on a phone.
+
+## Aurora (`src/aurora.ts`)
+
+- Centred-dipole geomagnetic latitude, pole at 80.8°N 72.8°W (IGRF-14, 2025.0; `GEOMAG_NORTH_POLE`).
+- Tiers on |magLat| during NIGHT only: `likely` ≥ 62°, `possible` ≥ 55° (oval edge ~63° quiet / ~59° at Kp 4–5, plus ~4° extra reach from 11 km). Above 74° (polar cap) the glow is on the *equatorward* side. No live Kp (offline build) — advice is hedged.
+- `auroraAt(sample)` → tier, strength, side (window facing the aurora), horizontal direction; `auroraWindows(f)` merges NIGHT stretches (gaps < 10 min bridged), `tPeak` = closest approach to the 67° oval centre.
+- Seat advice adds one clickable `🌌` line per window (`auroraAdviceLines` in recap-panel.ts) → jumps to `tPeak` and opens that window. The window-view sky shader has a separate "Aurora block" (`uAuroraDir`, `uAuroraStrength`, `uTime`); while aurora strength > 0 the rays drift, so `render()` reports "still animating" and the loop keeps drawing (only while the window view shows aurora).
 
 ## Data files
 
