@@ -8,6 +8,7 @@ import { SEAT_LETTERS } from './seat';
 import { createWindowView } from './window-view';
 import { TERMINATOR_LAYER, createTerminatorOverlay, legendHtml } from './terminator';
 import { moonVecER, topocentricMoonDir } from './moon';
+import { createPlane } from './plane-model';
 import { ATMOSPHERE_LAYER, buildOceanRoughness, createAtmosphere, createRouteLineMaterial, makeRouteLine, patchNightLights } from './globe-visuals';
 import { arrIsoToDurationMin, durationToArrIso, formatDuration, formatTzInfo, parseDuration } from './time';
 
@@ -369,20 +370,10 @@ let progress = 0;              // 0..1 along the route
 let playing  = false;
 const PLAY_WALL_SECONDS = 25;  // how long the whole flight takes on screen
 
-let planeMesh: THREE.Mesh | null = null;
-function ensurePlane(): THREE.Mesh {
-  if (planeMesh) return planeMesh;
-  // ConeGeometry's axis is +Y; we'll align +Y with the flight heading each
-  // frame, so the cone lies tangent to the surface with its tip pointing along
-  // the direction of travel.
-  const m = new THREE.Mesh(
-    new THREE.ConeGeometry(0.03, 0.1, 14),
-    new THREE.MeshBasicMaterial({ color: 0xffee55, toneMapped: false })
-  );
-  earth.add(m);
-  planeMesh = m;
-  return m;
-}
+// Airliner model (plane-model.ts): created once, shown while a flight exists.
+const plane = createPlane();
+earth.add(plane.group);
+function ensurePlane() { plane.group.visible = true; }
 
 function clearFlight() {
   flight = null;
@@ -390,12 +381,7 @@ function clearFlight() {
   lastFrameT = NaN;
   progress = 0;
   playing = false;
-  if (planeMesh) {
-    earth.remove(planeMesh);
-    planeMesh.geometry.dispose();
-    (planeMesh.material as THREE.Material).dispose();
-    planeMesh = null;
-  }
+  plane.group.visible = false;
   hideRecap();
 }
 
@@ -463,7 +449,7 @@ function aimSunLight() {
 }
 
 function updateFlightFrame(t: number) {
-  if (!flight || !planeMesh) return;
+  if (!flight) return;
   aimSunLight();
   if (t === lastFrameT) return;   // paused: skip the math and DOM writes
   lastFrameT = t;
@@ -474,8 +460,7 @@ function updateFlightFrame(t: number) {
   aimSunLight();
 
   // Plane mesh: position & heading in Earth-local frame.
-  planeMesh.position.copy(s.pos).multiplyScalar(EARTH_RADIUS * PATH_LIFT);
-  planeMesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), s.heading);
+  plane.place(s.pos, s.heading, EARTH_RADIUS * PATH_LIFT);
 
   updateRecapHighlight(s.utcMs);
   updateSunViz(s.sR, s.sF, s.phase !== 'NIGHT');
@@ -1090,7 +1075,7 @@ function renderWindowView(): boolean {
   if (rect.width < 1 || rect.height < 1) return false;
   const cs = currentSample!;
   const moonDir = topocentricMoonDir(moonVecER(cs.utcMs), cs.pos, cs.altKm);
-  return windowView.render(cs, windowSide!, rect, [currentRoute, planeMesh], moonDir);
+  return windowView.render(cs, windowSide!, rect, [currentRoute, plane.group], moonDir);
 }
 
 // Seat advice click: jump to that sunrise/sunset (paused) and look out the
@@ -1205,6 +1190,7 @@ function animate() {
 
   terminator.setSunPosition(sun.position);
   atmosphere.setSunPosition(sun.position);
+  plane.fitToScreen(camera, window.innerHeight);   // constant on-screen size
   renderer.render(scene, camera);
   if (renderWindowView()) needsRender = true;
 }

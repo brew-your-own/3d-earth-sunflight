@@ -33,6 +33,13 @@
   Licensed under **Creative Commons Attribution 4.0** (CC BY 4.0).
   Author: INOVE.
 
+## 3D model
+
+- **Airplane** by Poly by Google — <https://poly.pizza/m/fzIXe2paBN9>
+  (via Poly Pizza). Licensed under **Creative Commons Attribution 3.0**
+  (CC BY 3.0, <https://creativecommons.org/licenses/by/3.0/>).
+  Used as `src/models/airplane.glb`; normals computed at load time, unmodified otherwise.
+
 ## Software dependencies
 
 - **Three.js** (MIT) — <https://threejs.org>

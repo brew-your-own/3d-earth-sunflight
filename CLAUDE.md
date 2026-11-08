@@ -51,6 +51,7 @@ DOM / scene modules:
 - `src/recap-panel.ts` — time-reference toggle (persisted in localStorage `recap-time-ref`, all times go through `time-ref.ts`), seat advice (clickable → `onAdvicePick`), recap table, time breakdown, plane/sun SVG, timeline strip under the scrubber
 - `src/window-view.ts` — window-seat camera (`[W]`: off → left → right), rendered into the `#window-view` overlay's rect with scissor after the main render
 - `src/globe-visuals.ts` — atmosphere rim shell (`createAtmosphere`, layer 3, additive, sun-following), ocean glint (`buildOceanRoughness`: roughness map derived from the day map via `isOceanPixel`, built in the day map's onLoad), `patchNightLights` (`onBeforeCompile` fades the emissive night map by geometric N·L of directional light 0, so city lights vanish on the day side), Line2 route lines (`createRouteLineMaterial` — one shared material, `resolution` updated in `applyRendererSize`; `clearRoute` must not dispose it)
+- `src/plane-model.ts` — the airliner on the globe: `src/models/airplane.glb` (CC-BY, see CREDITS.md; nose +Z, up +Y, +X = left wing; no normals in the file → computed flat at load), normalised to length 1, cone placeholder until loaded, red/green wingtip nav lights. `place(pos, heading, r)` orients it from heading + radial up; `fitToScreen` (called every rendered frame) keeps it `PLANE_SCREEN_PX` long on screen
 - `src/terminator.ts` — day/night terminator + twilight band overlay (`[T]` toggle, legend in the settings panel): shell at 1.002 R parented to the Earth, shader lines at ground-standard sunrise (−0.833°), civil (−6°), nautical (−12°), astronomical (−18°) with faint zone fills; sun direction fed from `sun.position` every rendered frame
 - `src/main.ts` — renderer, camera/controls (orbit + globe drag), lights, textures, Earth/clouds/stars, route drawing (`setRoute`), flight state + playback (`setFlight`, `updateFlightFrame`), form/autocomplete/presets/URL wiring, HUD + hotkeys, live satellite, collapsible panels, animation loop
 
@@ -83,6 +84,7 @@ DOM / scene modules:
 
 - `airports/airports.csv` — OurAirports public-domain dump (~13 MB), source of truth.
 - `src/airports.json` — slim per-IATA JSON built from the CSV (~8.8k entries, ~1.2 MB), `tz` and `rank` filled at build time. **Imported** into `airports.ts` (not fetched at runtime) so the bundler can inline it for the singlefile build.
+- `src/models/airplane.glb` — 15 KB airliner (imported with `?url`, so it's hashed in the normal build and inlined in the singlefile one).
 - `src/textures/` — Solar System Scope Earth textures (2K) + Milky Way starfield. Also imported (not in `public/`) so Vite can hash-and-emit (normal build) or base64-inline (singlefile build).
 
 No `public/` folder is used: keeping assets out of `public/` is what enables the singlefile packaging to work.
