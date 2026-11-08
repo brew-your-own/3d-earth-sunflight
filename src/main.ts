@@ -215,38 +215,49 @@ function latLonToVec3(latDeg: number, lonDeg: number, radius: number): THREE.Vec
   );
 }
 
-// Slerp between the two surface points and sample N+1 positions along the arc.
+// Great-circle arc from unit vector p1 to p2, expressed as p1 plus a unit
+// tangent t1 (⊥ p1, in the arc's plane, pointing toward p2):
+//   pos(u)     = p1·cos(uω) + t1·sin(uω)
+//   heading(u) = −p1·sin(uω) + t1·cos(uω)
+// Unlike the textbook slerp (which divides by sin ω) this never produces NaN:
+// coincident points give ω = 0, and antipodal points (where every great
+// circle qualifies) get an arbitrary but stable perpendicular.
+type Arc = { p1: THREE.Vector3; t1: THREE.Vector3; omega: number };
+
+function makeArc(p1: THREE.Vector3, p2: THREE.Vector3): Arc {
+  const d = THREE.MathUtils.clamp(p1.dot(p2), -1, 1);
+  const omega = Math.acos(d);
+  const t1 = p2.clone().addScaledVector(p1, -d);   // reject p1 component
+  if (t1.lengthSq() < 1e-12) {
+    // Coincident or antipodal: pick any direction perpendicular to p1.
+    const ref = Math.abs(p1.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+    t1.crossVectors(ref, p1);
+  }
+  t1.normalize();
+  return { p1: p1.clone(), t1, omega };
+}
+
+function arcPoint(arc: Arc, u: number, out = new THREE.Vector3()): THREE.Vector3 {
+  const a = u * arc.omega;
+  return out.copy(arc.p1).multiplyScalar(Math.cos(a)).addScaledVector(arc.t1, Math.sin(a));
+}
+
+function arcHeading(arc: Arc, u: number, out = new THREE.Vector3()): THREE.Vector3 {
+  const a = u * arc.omega;
+  return out.copy(arc.p1).multiplyScalar(-Math.sin(a)).addScaledVector(arc.t1, Math.cos(a));
+}
+
+// Sample N+1 positions along the arc between two surface points.
 function greatCirclePoints(
   lat1: number, lon1: number,
   lat2: number, lon2: number,
   radius: number,
   segments = 128
 ): THREE.Vector3[] {
-  const p1 = latLonToVec3(lat1, lon1, 1);
-  const p2 = latLonToVec3(lat2, lon2, 1);
-  const omega = Math.acos(THREE.MathUtils.clamp(p1.dot(p2), -1, 1));
-  const sinOmega = Math.sin(omega);
-
+  const arc = makeArc(latLonToVec3(lat1, lon1, 1), latLonToVec3(lat2, lon2, 1));
   const points: THREE.Vector3[] = [];
-  // Antipodal/coincident: slerp is undefined — fall back to a stable interpolation
-  if (sinOmega < 1e-6) {
-    for (let i = 0; i <= segments; i++) {
-      const t = i / segments;
-      points.push(p1.clone().lerp(p2, t).normalize().multiplyScalar(radius));
-    }
-    return points;
-  }
-
   for (let i = 0; i <= segments; i++) {
-    const t = i / segments;
-    const a = Math.sin((1 - t) * omega) / sinOmega;
-    const b = Math.sin(t * omega) / sinOmega;
-    points.push(
-      new THREE.Vector3()
-        .addScaledVector(p1, a)
-        .addScaledVector(p2, b)
-        .multiplyScalar(radius)
-    );
+    points.push(arcPoint(arc, i / segments).multiplyScalar(radius));
   }
   return points;
 }
@@ -471,8 +482,7 @@ function subsolarPoint(utcMs: number): { lat: number; lon: number } {
 // the segment's slice of overall progress (t ∈ [0,1]) — split proportional to
 // arc length so the plane moves at uniform angular speed across the whole path.
 type Segment = {
-  p1: THREE.Vector3; p2: THREE.Vector3;
-  omega: number; sinOmega: number;
+  arc: Arc;
   distanceKm: number;
   tStart: number; tEnd: number;
 };
@@ -522,8 +532,8 @@ function clearFlight() {
 }
 
 // Position + heading along the piecewise great circle, given overall t ∈ [0,1].
-// Walks segments to find the active one, then slerps within it. Heading is the
-// slerp's derivative — tangent to the great circle, pointing dep → arr.
+// Walks segments to find the active one, then moves along its arc. Heading is
+// the arc's tangent at that point, pointing dep → arr.
 function planeAt(f: Flight, t: number): { pos: THREE.Vector3; heading: THREE.Vector3 } {
   let seg = f.segments[f.segments.length - 1];
   for (const s of f.segments) {
@@ -531,20 +541,7 @@ function planeAt(f: Flight, t: number): { pos: THREE.Vector3; heading: THREE.Vec
   }
   const span = seg.tEnd - seg.tStart;
   const u    = span > 0 ? THREE.MathUtils.clamp((t - seg.tStart) / span, 0, 1) : 0;
-  const { omega, sinOmega: s, p1, p2 } = seg;
-  const a = Math.sin((1 - u) * omega) / s;
-  const b = Math.sin(u * omega)       / s;
-  const pos = new THREE.Vector3()
-    .addScaledVector(p1, a)
-    .addScaledVector(p2, b)
-    .normalize();
-  const ka = -omega * Math.cos((1 - u) * omega) / s;
-  const kb =  omega * Math.cos(u * omega)       / s;
-  const heading = new THREE.Vector3()
-    .addScaledVector(p1, ka)
-    .addScaledVector(p2, kb)
-    .normalize();
-  return { pos, heading };
+  return { pos: arcPoint(seg.arc, u), heading: arcHeading(seg.arc, u) };
 }
 
 function setFlight(
@@ -564,30 +561,25 @@ function setFlight(
   if (arrMs <= depMs) return { ok: false, error: 'Arrival must be after departure (UTC).' };
 
   // Build segments and split overall t-range proportional to arc length.
+  // Zero-length legs (a waypoint repeating its neighbour) are dropped: they
+  // contribute no distance and their heading would be meaningless.
   const chain = [r.from, ...r.waypoints, r.to];
   const pts   = chain.map((ap) => latLonToVec3(ap.lat, ap.lon, 1));
-  const omegas = [] as number[];
-  let totalOmega = 0;
+  const arcs: Arc[] = [];
   for (let i = 0; i < pts.length - 1; i++) {
-    const w = Math.acos(THREE.MathUtils.clamp(pts[i].dot(pts[i + 1]), -1, 1));
-    omegas.push(w);
-    totalOmega += w;
+    const arc = makeArc(pts[i], pts[i + 1]);
+    if (arc.omega > 1e-9) arcs.push(arc);
   }
-  if (totalOmega === 0) return { ok: false, error: 'Route has zero length.' };
+  const totalOmega = arcs.reduce((sum, a) => sum + a.omega, 0);
+  if (arcs.length === 0) return { ok: false, error: 'Route has zero length.' };
   const segments: Segment[] = [];
   let cumT = 0;
-  for (let i = 0; i < omegas.length; i++) {
-    const frac = omegas[i] / totalOmega;
+  arcs.forEach((arc, i) => {
     const tStart = cumT;
-    const tEnd   = i === omegas.length - 1 ? 1 : cumT + frac;
+    const tEnd   = i === arcs.length - 1 ? 1 : cumT + arc.omega / totalOmega;
     cumT = tEnd;
-    segments.push({
-      p1: pts[i], p2: pts[i + 1],
-      omega: omegas[i], sinOmega: Math.sin(omegas[i]),
-      distanceKm: omegas[i] * EARTH_RADIUS_KM,
-      tStart, tEnd,
-    });
-  }
+    segments.push({ arc, distanceKm: arc.omega * EARTH_RADIUS_KM, tStart, tEnd });
+  });
   const distanceKm = totalOmega * EARTH_RADIUS_KM;
   const durationMs = arrMs - depMs;
   flight = {
@@ -1051,6 +1043,19 @@ inDep.addEventListener('input', () => {
 inDur.addEventListener('input', () => { syncArrFromDuration(); refreshTzInfo(); });
 inArr.addEventListener('input', () => { syncDurationFromArr(); refreshTzInfo(); });
 
+// Point the dep/arr timezone context at these airports and re-derive the
+// hidden end-time field. Must run whenever the airports change and before
+// times are read — otherwise in Duration mode inArr would still hold an
+// arrival computed in the *previous* destination's timezone.
+function syncRouteTimezones(from: Airport, to: Airport) {
+  if (from === lastRouteFrom && to === lastRouteTo) return;
+  lastRouteFrom = from;
+  lastRouteTo   = to;
+  if (endMode === 'duration') syncArrFromDuration();
+  else                        syncDurationFromArr();
+  refreshTzInfo();
+}
+
 function submitRoute() {
   const from = commitAirportInput(inFrom);
   const to   = commitAirportInput(inTo);
@@ -1063,13 +1068,8 @@ function submitRoute() {
   if (r.ok) {
     const viaStr = via.length > 0 ? ` via ${via.join(' → ')}` : '';
     showStatus(`${from} ${r.from.city} → ${to} ${r.to.city}${viaStr}`);
+    syncRouteTimezones(r.from, r.to);
     updateUrl(from, to, via);
-    lastRouteFrom = r.from;
-    lastRouteTo   = r.to;
-    // The hidden mode's field becomes meaningful now that we have TZs.
-    if (endMode === 'duration') syncArrFromDuration();
-    else                        syncDurationFromArr();
-    refreshTzInfo();
   } else {
     showStatus(r.error, true);
   }
@@ -1177,6 +1177,8 @@ playBtn.addEventListener('click', () => {
     showStatus('Could not match both airports — try IATA, city, or name.', true);
     return;
   }
+  // Airports may have been edited without pressing "Show route".
+  syncRouteTimezones(airports[fromCode], airports[toCode]);
   if (!inDep.value || !inArr.value) {
     showStatus('Set both departure and arrival times.', true);
     return;
@@ -1196,6 +1198,7 @@ playBtn.addEventListener('click', () => {
   const r = setFlight(fromCode, toCode, inDep.value, inArr.value, via);
   if (!r.ok) { showStatus(r.error, true); return; }
   flightInputSig = sig;
+  updateUrl(fromCode, toCode, via);
   const viaStr = via.length > 0 ? ` via ${via.join(' → ')}` : '';
   showStatus(`${fromCode} ${flight!.from.city} → ${toCode} ${flight!.to.city}${viaStr}`);
   if (progress >= 1) progress = 0;
@@ -1271,11 +1274,15 @@ function readUrlRoute(): RouteSpec | null {
   };
 }
 
+// Times are written as the local wall-clock values from the form (each read
+// in its airport's timezone), so a shared link reproduces the exact flight.
 function updateUrl(from: string, to: string, via: string[]) {
   const p = new URLSearchParams();
   p.set('from', from);
   p.set('to',   to);
   if (via.length) p.set('via', via.join(','));
+  if (inDep.value) p.set('dep', inDep.value);
+  if (inArr.value) p.set('arr', inArr.value);
   history.replaceState(null, '', `${window.location.pathname}?${p}`);
 }
 
@@ -1327,6 +1334,7 @@ const earthMat = earth.material as THREE.MeshStandardMaterial;
 let cloudsOn = true;
 let nightOn  = true;
 let liveOn   = false;
+let liveLoading = false;  // a GIBS request is in flight; ignore repeat presses
 let liveDateLabel = '';  // YYYY-MM-DD currently displayed when live is on
 
 const hud = document.getElementById('info-text')!;
@@ -1340,7 +1348,7 @@ function refreshHud() {
     `Rev: <a href="https://github.com/brew-your-own/3d-earth-sunflight/commit/${__GIT_REV__}" target="_blank" rel="noopener">${__GIT_REV__}</a><br>` +
     `<span class="hud-cmd" data-key="c">[C] clouds: <b>${cloudsOn ? 'on' : 'off'}</b></span><br>` +
     `<span class="hud-cmd" data-key="n">[N] night lights: <b>${nightOn ? 'on' : 'off'}</b></span><br>` +
-    `<span class="hud-cmd" data-key="l">[L] live satellite: <b>${liveOn ? `on (${liveDateLabel})` : 'off'}</b></span><br>` +
+    `<span class="hud-cmd" data-key="l">[L] live satellite: <b>${liveLoading ? 'loading…' : liveOn ? `on (${liveDateLabel})` : 'off'}</b></span><br>` +
     `<span class="hud-cmd" data-key="m">[M] control mode: <b>${controlMode}</b></span><br>` +
     `<span class="hud-cmd" data-key=" ">[Space] play/pause</span><br>` +
     `<span class="hud-cmd" data-key="g">[G] center on your location (Barcelona fallback)</span>`;
@@ -1426,14 +1434,17 @@ let liveTexture: THREE.Texture | null = null;
 let cloudsBeforeLive = true;  // remember user's C state to restore on toggle off
 
 function setLive(on: boolean) {
-  if (on === liveOn) return;
+  if (on === liveOn || liveLoading) return;
   if (on) {
     // Two days back: gives the processing pipeline enough time to fill in
     // late-arriving swaths, so the global mosaic is essentially complete.
     const date = isoUtcDate(2);
+    liveLoading = true;
+    refreshHud();
     loader.load(
       gibsTrueColorUrl(date),
       (tex) => {
+        liveLoading = false;
         tex.colorSpace = THREE.SRGBColorSpace;
         tex.anisotropy = maxAniso;
         liveTexture?.dispose();
@@ -1449,6 +1460,7 @@ function setLive(on: boolean) {
       },
       undefined,
       () => {
+        liveLoading = false;
         liveOn = false;
         showStatus('Failed to load live satellite imagery (network/CORS).', true);
         refreshHud();
