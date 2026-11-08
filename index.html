@@ -64,6 +64,10 @@
       #info-text a.github-link { vertical-align: -3px; margin-right: 4px; }
       #info-text .hud-cmd { cursor: pointer; user-select: none; }
       #info-text .hud-cmd:hover { color: #fff; }
+      #twilight-legend { font-size: 10px; line-height: 1.5; color: #8a9aa8; margin-top: 2px; }
+      #twilight-legend.hidden { display: none; }
+      #twilight-legend .tl-key { white-space: nowrap; margin-right: 6px; }
+      #twilight-legend .tl-dash { display: inline-block; width: 10px; height: 2px; vertical-align: middle; margin-right: 3px; }
 
       /* ─── Route panel (bottom-left) ──────────────────────────────────── */
       #route-form {
@@ -304,6 +308,7 @@
       <div class="panel-body">
         <div id="info-text"></div>
         <div><label>Day/night contrast <input id="contrast" type="range" min="0" max="100" value="50" /></label></div>
+        <div id="twilight-legend"></div>
       </div>
     </div>
     <form id="route-form" class="panel">

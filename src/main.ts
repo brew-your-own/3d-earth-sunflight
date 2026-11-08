@@ -6,6 +6,7 @@ import { type Flight, type FlightSample, type Side, buildFlight, flightSampleAt 
 import { hideRecap, onAdvicePick, renderRecap, updateRecapHighlight, updateSunViz } from './recap-panel';
 import { SEAT_LETTERS } from './seat';
 import { createWindowView } from './window-view';
+import { TERMINATOR_LAYER, createTerminatorOverlay, legendHtml } from './terminator';
 import { arrIsoToDurationMin, durationToArrIso, formatDuration, formatTzInfo, parseDuration } from './time';
 
 // Assets are imported (not fetched) so the bundler can decide per build
@@ -200,6 +201,16 @@ const clouds = new THREE.Mesh(
 );
 clouds.rotation.z = THREE.MathUtils.degToRad(23.4);
 scene.add(clouds);
+
+// ─── Terminator / twilight bands (main view only) ────────────────────────────
+// Own render layer, enabled on the main camera only, so the window camera
+// (layers 0 + 1) never sees it. Sun direction is fed from the directional
+// light each rendered frame (see animate), so it always matches the shading.
+const terminator = createTerminatorOverlay({ earth, earthRadius: EARTH_RADIUS });
+camera.layers.enable(TERMINATOR_LAYER);
+let twilightOn = true;
+const twilightLegend = document.getElementById('twilight-legend');
+if (twilightLegend) twilightLegend.innerHTML = legendHtml();
 
 const windowView = createWindowView({
   renderer, scene, earth, clouds,
@@ -871,6 +882,7 @@ function refreshHud() {
     `<span class="hud-cmd" data-key="l">[L] live satellite: <b>${liveLoading ? 'loading…' : liveOn ? `on (${liveDateLabel})` : 'off'}</b></span><br>` +
     `<span class="hud-cmd" data-key="m">[M] control mode: <b>${controlMode}</b></span><br>` +
     `<span class="hud-cmd" data-key="w">[W] window view: <b>${windowSide ? windowSide.toLowerCase() : 'off'}</b></span><br>` +
+    `<span class="hud-cmd" data-key="t">[T] twilight bands: <b>${twilightOn ? 'on' : 'off'}</b></span><br>` +
     `<span class="hud-cmd" data-key=" ">[Space] play/pause</span><br>` +
     `<span class="hud-cmd" data-key="g">[G] center on your location (Barcelona fallback)</span>`;
 }
@@ -1009,6 +1021,12 @@ const hudActions: Record<string, () => void> = {
   m: () => { controlMode = (controlMode === 'orbit') ? 'globe' : 'orbit'; applyControlMode(); refreshHud(); },
   // off → left → right → off
   w: () => { setWindowSide(windowSide === null ? 'LEFT' : windowSide === 'LEFT' ? 'RIGHT' : null); },
+  t: () => {
+    twilightOn = !twilightOn;
+    terminator.visible = twilightOn;
+    twilightLegend?.classList.toggle('hidden', !twilightOn);
+    refreshHud();
+  },
   ' ': () => { playBtn.click(); },
 };
 
@@ -1167,6 +1185,7 @@ function animate() {
   if (controls.update()) dirty = true;
   if (!dirty) return;
 
+  terminator.setSunPosition(sun.position);
   renderer.render(scene, camera);
   if (renderWindowView()) needsRender = true;
 }
