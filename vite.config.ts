@@ -4,8 +4,8 @@ import { configDefaults } from 'vitest/config';
 import { viteSingleFile } from 'vite-plugin-singlefile';
 import { execSync } from 'node:child_process';
 
-function gitRev(): string {
-  try { return execSync('git rev-parse --short HEAD').toString().trim(); }
+function git(cmd: string): string {
+  try { return execSync(`git ${cmd}`, { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(); }
   catch { return 'unknown'; }
 }
 
@@ -19,7 +19,10 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: single ? [viteSingleFile()] : [],
     define: {
-      __GIT_REV__: JSON.stringify(gitRev()),
+      // Commit SHA for the GitHub link; `git describe` (e.g. v1.0.1-14-g17b07da,
+      // "-dirty" with local changes) for display. CI needs tags fetched.
+      __GIT_REV__: JSON.stringify(git('rev-parse --short HEAD')),
+      __GIT_DESCRIBE__: JSON.stringify(git('describe --tags --always --dirty')),
     },
     test: {
       // Agent git worktrees live under .claude/worktrees and carry their own

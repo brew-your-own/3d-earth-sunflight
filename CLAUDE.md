@@ -25,7 +25,7 @@ node scripts/build-airports.mjs
 
 ## Stack
 
-- **Vite 6** — bundler/dev server; config in `vite.config.ts` (build modes, `__GIT_REV__` define, dev `server.allowedHosts` for `*.home.arpa`)
+- **Vite 6** — bundler/dev server; config in `vite.config.ts` (build modes, `__GIT_REV__` / `__GIT_DESCRIBE__` defines, dev `server.allowedHosts` for `*.home.arpa`)
 - **Three.js 0.175** with `@types/three`
 - **luxon** — IANA timezone math for local↔UTC conversion at runtime
 - **tz-lookup** (dev only) — lat/lon → IANA tz at build time
