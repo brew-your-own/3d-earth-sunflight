@@ -192,7 +192,14 @@
       }
       .remove-via:hover { color: #ff6b6b !important; }
       .add-wp { font-size: 11px !important; padding: 3px 8px !important; }
-      #route-status { color: #aaa; min-height: 1.2em; }
+      #route-status { color: #aaa; min-height: 1.2em; white-space: pre-line; }
+      body.track-drop::after {
+        content: 'Drop a KML / KMZ / GPX track';
+        position: fixed; inset: 12px; z-index: 50; pointer-events: none;
+        display: flex; align-items: center; justify-content: center;
+        border: 2px dashed #6ab0ff; border-radius: 12px;
+        background: rgba(20, 40, 70, 0.35); color: #cfe; font: 16px system-ui, sans-serif;
+      }
       #route-status.error { color: #ff6b6b; }
       #flight-hud { color: #cfe; min-height: 6em; white-space: pre; }
 
@@ -378,6 +385,11 @@
           <input id="arr-time" type="datetime-local" />
           <input id="arr-duration" type="text" placeholder="11h 30m" style="display: none;" />
           <span id="arr-tz" class="tz-info"></span>
+        </div>
+        <div class="row">
+          <button type="button" id="load-track">Load GPS track…</button>
+          <input id="track-file" type="file" accept=".kml,.kmz,.gpx" hidden />
+          <span class="tz-info">KML · KMZ · GPX, or drop a file on the globe</span>
         </div>
         <div id="route-status"></div>
         <div id="flight-hud"></div>

@@ -72,20 +72,23 @@ export function resolveAirportCode(value: string): string {
 // for the timezone the plane is over (over open ocean that's the nearest
 // island/coast, which is what a passenger's phone would roughly show).
 type NearEntry = { code: string; ap: Airport; x: number; y: number; z: number };
-let nearIndex: NearEntry[] | null = null;
+const nearIndex = new Map<number, NearEntry[]>();
 const unit = (lat: number, lon: number) => {
   const la = lat * Math.PI / 180, lo = lon * Math.PI / 180;
   return { x: Math.cos(la) * Math.cos(lo), y: Math.cos(la) * Math.sin(lo), z: Math.sin(la) };
 };
-export function nearestAirport(lat: number, lon: number): Suggestion {
-  if (!nearIndex) {
-    nearIndex = Object.entries(airports)
-      .filter(([, ap]) => (ap.rank ?? 0) >= 5 && ap.tz)
+// minRank 0 = any airport (used to name a GPS track's endpoints).
+export function nearestAirport(lat: number, lon: number, minRank = 5): Suggestion {
+  let idx = nearIndex.get(minRank);
+  if (!idx) {
+    idx = Object.entries(airports)
+      .filter(([, ap]) => (ap.rank ?? 0) >= minRank && ap.tz)
       .map(([code, ap]) => ({ code, ap, ...unit(ap.lat, ap.lon) }));
+    nearIndex.set(minRank, idx);
   }
   const p = unit(lat, lon);
-  let best = nearIndex[0], bestDot = -2;
-  for (const e of nearIndex) {
+  let best = idx[0], bestDot = -2;
+  for (const e of idx) {
     const d = e.x * p.x + e.y * p.y + e.z * p.z;
     if (d > bestDot) { bestDot = d; best = e; }
   }

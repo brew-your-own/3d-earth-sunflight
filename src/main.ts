@@ -1,8 +1,10 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { type Airport, type Suggestion, airports, resolveAirportCode, searchAirports } from './airports';
-import { greatCirclePoints, latLonToVec3, vec3ToLatLon } from './geo';
-import { type Flight, type FlightSample, type Side, buildFlight, flightSampleAt } from './flight';
+import { arcPoint, greatCirclePoints, latLonToVec3, vec3ToLatLon } from './geo';
+import { type Flight, type FlightSample, type Side, buildFlight, buildTrackFlight, distanceAt, flightSampleAt, groundSpeedAt } from './flight';
+import { TrackError, cleanTrack, readTrackFile } from './track';
+import { DateTime } from 'luxon';
 import { hideRecap, onAdvicePick, renderRecap, setPlaneDrawing, updateRecapHighlight, updateSunViz } from './recap-panel';
 import { SEAT_LETTERS } from './seat';
 import { type ViewSeat, createWindowView } from './window-view';
@@ -414,6 +416,46 @@ function setFlight(
 
 (window as unknown as { setFlight: typeof setFlight }).setFlight = setFlight;
 
+// A real GPS track: the recorded path as one polyline (long legs — coverage
+// gaps bridged by a great circle — are subdivided so the chord doesn't dip
+// into the globe), endpoint markers labelled with the nearest airports.
+function drawTrackRoute(f: Flight) {
+  clearRoute();
+  const g = new THREE.Group();
+  const r = EARTH_RADIUS * PATH_LIFT;
+  const pts: THREE.Vector3[] = [arcPoint(f.segments[0].arc, 0).multiplyScalar(r)];
+  for (const seg of f.segments) {
+    const n = Math.max(1, Math.ceil(seg.arc.omega / THREE.MathUtils.degToRad(0.5)));
+    for (let i = 1; i <= n; i++) pts.push(arcPoint(seg.arc, i / n).multiplyScalar(r));
+  }
+  g.add(makeRouteLine(pts, routeLineMat));
+  const labelLift = EARTH_RADIUS * (PATH_LIFT + 0.04);
+  const ends: Array<[THREE.Vector3, string, number, string]> = [
+    [arcPoint(f.segments[0].arc, 0), f.fromCode, 0x33ff66, '#66ff99'],
+    [arcPoint(f.segments[f.segments.length - 1].arc, 1), f.toCode, 0xff3333, '#ff7766'],
+  ];
+  for (const [p, code, color, css] of ends) {
+    const { lat, lon } = vec3ToLatLon(p);
+    g.add(createSurfaceMarker(lat, lon, color));
+    const label = createIataLabel(code, css);
+    label.position.copy(latLonToVec3(lat, lon, labelLift));
+    g.add(label);
+  }
+  earth.add(g);
+  currentRoute = g;
+}
+
+function setTrackFlight(f: Flight) {
+  drawTrackRoute(f);
+  flight = f;
+  lastFrameT = NaN;
+  ensurePlane();
+  progress = 0;
+  playing = false;
+  renderRecap(flight);
+  updateFlightFrame(0);
+}
+
 // ─── Per-frame flight update ─────────────────────────────────────────────────
 
 const flightHud = document.getElementById('flight-hud') as HTMLDivElement;
@@ -472,13 +514,14 @@ function updateFlightFrame(t: number) {
 
   const { lat: planeLat, lon: planeLon } = vec3ToLatLon(s.pos);
   const utcStr = new Date(s.utcMs).toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
-  const traveledKm  = t * flight.distanceKm;
+  const traveledKm  = distanceAt(flight, t);
   const remainingKm = flight.distanceKm - traveledKm;
+  const speedKmh = flight.track ? groundSpeedAt(flight, t) : flight.speedKmh;
   flightHud.textContent = [
     `${utcStr}   ${(t * 100).toFixed(0)}%   [${s.phase}]`,
     `Plane: ${fmt(planeLat)}°, ${fmt(planeLon)}°   Alt: ${fmt(s.altKm)} km   Sun elev: ${fmt(s.elevDeg, 0)}°`,
     `${sideLabel(s.sR, s.sF)}   at ${formatClock(s.sR, s.sF)}`,
-    `Speed: ${Math.round(flight.speedKmh)} km/h   ` +
+    `${flight.track ? 'Ground speed' : 'Speed'}: ${Math.round(speedKmh)} km/h   ` +
       `${Math.round(traveledKm)} / ${Math.round(flight.distanceKm)} km   ` +
       `${Math.round(remainingKm)} km left`,
   ].join('\n');
@@ -722,10 +765,11 @@ playBtn.addEventListener('click', () => {
   const via = collectWaypointCodes();
   const sig = [fromCode, toCode, inDep.value, inArr.value, ...via].join('|');
 
-  // Resume in place if the flight on screen was built from these exact inputs
-  // and we're partway through. Otherwise (no flight, inputs changed, or at end)
-  // rebuild from scratch.
-  if (flight && sig === flightInputSig && progress < 1) {
+  // Resume in place (or restart, if at the end) when the flight on screen was
+  // built from these exact inputs — which is also what keeps a loaded GPS
+  // track playing. Otherwise (no flight, inputs changed) rebuild from scratch.
+  if (flight && sig === flightInputSig) {
+    if (progress >= 1) progress = 0;
     playing = true;
     updatePlayBtn();
     return;
@@ -741,6 +785,81 @@ playBtn.addEventListener('click', () => {
   scrubEl.value = String(Math.round(progress * 1000));
   playing = true;
   updatePlayBtn();
+});
+
+// ─── GPS track loading (button + drag-and-drop) ──────────────────────────────
+
+const loadTrackBtn = document.getElementById('load-track') as HTMLButtonElement;
+const trackFileEl  = document.getElementById('track-file') as HTMLInputElement;
+
+async function loadTrackFile(file: File) {
+  showStatus(`Reading ${file.name}…`);
+  try {
+    const parsed = await readTrackFile(file.name, new Uint8Array(await file.arrayBuffer()));
+    const clean = cleanTrack(parsed.points);
+    const built = buildTrackFlight(parsed.name, clean.points);
+    if (!built.ok) { showStatus(built.error, true); return; }
+    const f = built.flight;
+    setTrackFlight(f);
+
+    // Mirror the track in the form so the tz hints, the recap clocks and Play
+    // (which resumes when the inputs match flightInputSig) all line up. Editing
+    // any field and pressing Play builds a planned great-circle flight instead.
+    const local = (ms: number, tz: string) => DateTime.fromMillis(ms, { zone: tz }).toFormat("yyyy-LL-dd'T'HH:mm");
+    inFrom.value = f.fromCode;
+    inTo.value   = f.toCode;
+    viaList.innerHTML = '';
+    if (endMode !== 'datetime') setEndMode('datetime');
+    inDep.value = local(f.depUtcMs, f.from.tz);
+    inArr.value = local(f.arrUtcMs, f.to.tz);
+    lastRouteFrom = lastRouteTo = null;   // force the tz hints to refresh
+    syncRouteTimezones(f.from, f.to);
+    flightInputSig = [f.fromCode, f.toCode, inDep.value, inArr.value].join('|');
+    history.replaceState(null, '', window.location.pathname);   // a track can't live in the URL
+    scrubEl.value = '0';
+    updatePlayBtn();
+
+    const h = Math.floor(f.durationMs / 3_600_000), m = Math.round(f.durationMs / 60_000) % 60;
+    const notes = [...parsed.notes, ...clean.notes];
+    showStatus(
+      `Track “${parsed.name}”: ${f.fromCode} ${f.from.city} → ${f.toCode} ${f.to.city} · ` +
+      `${Math.round(f.distanceKm).toLocaleString()} km · ${h}h${String(m).padStart(2, '0')} · ` +
+      `${clean.points.length} pts` + (notes.length ? `\n(${notes.join('; ')})` : ''));
+  } catch (e) {
+    console.error(e);
+    showStatus(e instanceof TrackError ? e.message : `Could not read ${file.name}: ${(e as Error).message}`, true);
+  }
+  invalidate();
+}
+
+loadTrackBtn.addEventListener('click', () => trackFileEl.click());
+trackFileEl.addEventListener('change', () => {
+  const file = trackFileEl.files?.[0];
+  trackFileEl.value = '';   // picking the same file again still fires change
+  if (file) void loadTrackFile(file);
+});
+
+// Drop anywhere on the page. dragenter/leave fire for every child element,
+// so count them to know when the pointer really left the window.
+let dragDepth = 0;
+const hasFiles = (e: DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes('Files');
+window.addEventListener('dragenter', (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  if (dragDepth++ === 0) document.body.classList.add('track-drop');
+});
+window.addEventListener('dragover', (e) => { if (hasFiles(e)) e.preventDefault(); });
+window.addEventListener('dragleave', (e) => {
+  if (!hasFiles(e)) return;
+  if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove('track-drop'); }
+});
+window.addEventListener('drop', (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  dragDepth = 0;
+  document.body.classList.remove('track-drop');
+  const file = e.dataTransfer?.files[0];
+  if (file) void loadTrackFile(file);
 });
 
 scrubEl.addEventListener('input', () => {

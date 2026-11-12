@@ -3,8 +3,9 @@
 // Pure — no scene or DOM state — so it's covered by unit tests.
 import * as THREE from 'three';
 import { DateTime } from 'luxon';
-import type { Airport } from './airports';
+import { type Airport, nearestAirport } from './airports';
 import { EARTH_RADIUS_KM, type Arc, arcHeading, arcPoint, latLonToVec3, makeArc } from './geo';
+import type { TrackPoint } from './track';
 import { type Phase, altitudeKm, daylightLabel, subsolarPoint } from './astro';
 
 // One great-circle leg between two consecutive route points. tStart..tEnd is
@@ -23,6 +24,10 @@ export type Flight = {
   depUtcMs: number; arrUtcMs: number; durationMs: number;
   segments: Segment[];
   distanceKm: number; speedKmh: number;
+  // Set for a flight built from a real GPS track (buildTrackFlight): one
+  // altitude per segment boundary (segments.length + 1 entries, km), or null
+  // when the file had no altitudes (then the trapezoid profile is used).
+  track?: { name: string; altKm: number[] | null };
 };
 
 export type RouteSpec = {
@@ -79,16 +84,136 @@ export function buildFlight(
   };
 }
 
-// Position + heading (unit vectors, Earth-local frame) at overall t ∈ [0,1].
-// Walks segments to find the active one, then moves along its arc.
-export function planeAt(f: Flight, t: number): { pos: THREE.Vector3; heading: THREE.Vector3 } {
-  let seg = f.segments[f.segments.length - 1];
-  for (const s of f.segments) {
-    if (t <= s.tEnd) { seg = s; break; }
+// A flight from a real GPS track (track.ts → cleanTrack). Progress t maps to
+// time, not distance: each point's t is its timestamp's share of the flight,
+// so the plane speeds up, slows and holds exactly as recorded. Endpoints are
+// named after the nearest airport (any size) — their tz drives the recap's
+// dep/arr clocks.
+export function buildTrackFlight(
+  name: string, points: TrackPoint[],
+): { ok: true; flight: Flight } | { ok: false; error: string } {
+  if (points.length < 2) return { ok: false, error: 'Track has fewer than two points.' };
+  const depUtcMs = points[0].utcMs;
+  const arrUtcMs = points[points.length - 1].utcMs;
+  const durationMs = arrUtcMs - depUtcMs;
+  if (!(durationMs > 0)) return { ok: false, error: 'Track has no duration.' };
+
+  // Points missing an altitude take it from their neighbours (linear in time).
+  const known = points.flatMap((p, i) => (p.altM != null ? [i] : []));
+  const altAt = (i: number): number => {
+    if (known.length === 0) return 0;
+    let k = 0;
+    while (k < known.length - 1 && known[k + 1] <= i) k++;
+    const i0 = known[k], i1 = known[Math.min(k + 1, known.length - 1)];
+    const a0 = points[i0].altM!, a1 = points[i1].altM!;
+    if (i <= i0 || i1 === i0) return a0;
+    const u = (points[i].utcMs - points[i0].utcMs) / (points[i1].utcMs - points[i0].utcMs);
+    return a0 + (a1 - a0) * u;
+  };
+
+  const pts = points.map((p) => latLonToVec3(p.lat, p.lon, 1));
+  const segments: Segment[] = [];
+  const altKm: number[] = [Math.max(0, altAt(0) / 1000)];
+  for (let i = 0; i < points.length - 1; i++) {
+    const arc = makeArc(pts[i], pts[i + 1]);
+    segments.push({
+      arc, distanceKm: arc.omega * EARTH_RADIUS_KM,
+      tStart: (points[i].utcMs - depUtcMs) / durationMs,
+      tEnd:   i === points.length - 2 ? 1 : (points[i + 1].utcMs - depUtcMs) / durationMs,
+    });
+    altKm.push(Math.max(0, altAt(i + 1) / 1000));
   }
+  const distanceKm = segments.reduce((d, s) => d + s.distanceKm, 0);
+  const a = nearestAirport(points[0].lat, points[0].lon, 0);
+  const b = nearestAirport(points[points.length - 1].lat, points[points.length - 1].lon, 0);
+  return {
+    ok: true,
+    flight: {
+      from: a.ap, to: b.ap, fromCode: a.code, toCode: b.code,
+      waypoints: [], waypointCodes: [],
+      depUtcMs, arrUtcMs, durationMs, segments, distanceKm,
+      speedKmh: distanceKm / (durationMs / 3_600_000),
+      track: { name, altKm: points.some((p) => p.altM != null) ? altKm : null },
+    },
+  };
+}
+
+// Index of the segment active at t (binary search: tracks have hundreds).
+function segmentIndexAt(f: Flight, t: number): number {
+  const segs = f.segments;
+  let lo = 0, hi = segs.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (t <= segs[mid].tEnd) hi = mid; else lo = mid + 1;
+  }
+  return lo;
+}
+
+function segU(seg: Segment, t: number): number {
   const span = seg.tEnd - seg.tStart;
-  const u    = span > 0 ? THREE.MathUtils.clamp((t - seg.tStart) / span, 0, 1) : 0;
-  return { pos: arcPoint(seg.arc, u), heading: arcHeading(seg.arc, u) };
+  return span > 0 ? THREE.MathUtils.clamp((t - seg.tStart) / span, 0, 1) : 0;
+}
+
+function posAt(f: Flight, t: number, out = new THREE.Vector3()): THREE.Vector3 {
+  const seg = f.segments[segmentIndexAt(f, t)];
+  return arcPoint(seg.arc, segU(seg, t), out);
+}
+
+// A track's heading jumps at every vertex; the window camera would jerk. Use
+// the chord across ±HEADING_WINDOW_MS of flight instead (projected onto the
+// local horizontal). Stationary (taxi stop, hold on the runway): keep the
+// heading of the nearest leg that moved.
+const HEADING_WINDOW_MS = 30_000;
+
+function trackHeading(f: Flight, t: number, pos: THREE.Vector3, i: number): THREE.Vector3 {
+  const dt = HEADING_WINDOW_MS / f.durationMs;
+  const d = posAt(f, Math.min(1, t + dt)).sub(posAt(f, Math.max(0, t - dt)));
+  d.addScaledVector(pos, -d.dot(pos));
+  if (d.lengthSq() > 1e-16) return d.normalize();
+  const segs = f.segments;
+  for (let k = 0; k < segs.length; k++) {
+    for (const j of [i - k, i + k]) {
+      if (j < 0 || j >= segs.length || segs[j].arc.omega < 1e-9) continue;
+      const h = arcHeading(segs[j].arc, j < i ? 1 : 0);
+      h.addScaledVector(pos, -h.dot(pos));
+      if (h.lengthSq() > 1e-16) return h.normalize();
+    }
+  }
+  return arcHeading(segs[i].arc, 0);
+}
+
+// Position + heading (unit vectors, Earth-local frame) at overall t ∈ [0,1].
+export function planeAt(f: Flight, t: number): { pos: THREE.Vector3; heading: THREE.Vector3 } {
+  const i = segmentIndexAt(f, t);
+  const seg = f.segments[i];
+  const u = segU(seg, t);
+  const pos = arcPoint(seg.arc, u);
+  return { pos, heading: f.track ? trackHeading(f, t, pos, i) : arcHeading(seg.arc, u) };
+}
+
+// Altitude (km): the track's when there is one, else the trapezoid profile.
+function altitudeAt(f: Flight, t: number): number {
+  if (f.track?.altKm) {
+    const i = segmentIndexAt(f, t);
+    const a = f.track.altKm;
+    return a[i] + (a[i + 1] - a[i]) * segU(f.segments[i], t);
+  }
+  const durMin = f.durationMs / 60_000;
+  return altitudeKm(t * durMin, (1 - t) * durMin);
+}
+
+// Distance flown by t (km) and the ground speed at t (km/h). Uniform for a
+// planned flight; a track speeds up and slows down.
+export function distanceAt(f: Flight, t: number): number {
+  const i = segmentIndexAt(f, t);
+  let d = 0;
+  for (let k = 0; k < i; k++) d += f.segments[k].distanceKm;
+  return d + f.segments[i].distanceKm * segU(f.segments[i], t);
+}
+export function groundSpeedAt(f: Flight, t: number): number {
+  const seg = f.segments[segmentIndexAt(f, t)];
+  const h = (seg.tEnd - seg.tStart) * f.durationMs / 3_600_000;
+  return h > 0 ? seg.distanceKm / h : 0;
 }
 
 export type Side = 'LEFT' | 'RIGHT';
@@ -114,8 +239,7 @@ export function flightSampleAt(f: Flight, t: number): FlightSample {
   const sF = sunLocal.dot(heading);
   const sU = sunLocal.dot(up);
   const elevDeg = THREE.MathUtils.radToDeg(Math.asin(THREE.MathUtils.clamp(sU, -1, 1)));
-  const durMin = f.durationMs / 60_000;
-  const altKm = altitudeKm(t * durMin, (1 - t) * durMin);
+  const altKm = altitudeAt(f, t);
   return {
     utcMs, pos, heading, sunLocal, sR, sF, sU, altKm, elevDeg,
     phase: daylightLabel(elevDeg, altKm),

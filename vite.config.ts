@@ -18,6 +18,7 @@ export default defineConfig(({ mode }) => {
   const single = mode === 'singlefile';
   return {
     plugins: single ? [viteSingleFile()] : [],
+    assetsInclude: ['**/*.kmz'],   // track fixtures (src/fixtures), imported by tests
     define: {
       // Commit SHA for the GitHub link; `git describe` (e.g. v1.0.1-14-g17b07da,
       // "-dirty" with local changes) for display. CI needs tags fetched.
