@@ -119,6 +119,8 @@ function parseCoordList(s: string): RawCoord[] {
 type Anchor = RawCoord & { utcMs: number | null; secOfDay: number | null };
 
 const CLOCK_RE = /\b([01]?\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?\b/;
+// "Alt : 5312 feet" (NCAR), "Altitude:</b></span> <span>36,000 ft" (FR24).
+const ALT_FT_LABEL_RE = /\balt(?:itude)?\b[^0-9-]{0,40}(-?\d[\d,]*(?:\.\d+)?)\s*(?:feet|ft)\b/i;
 
 export function parseKml(xml: string, fallbackName = 'Track'): ParsedTrack {
   const notes: string[] = [];
@@ -140,6 +142,9 @@ export function parseKml(xml: string, fallbackName = 'Track'): ParsedTrack {
   const line: RawCoord[] = [];
   const anchors: Anchor[] = [];
   let sawFeetLabel = false;
+  // Votes from placemarks whose description states the altitude in feet:
+  // compare the label to the coordinate's altitude to learn its unit.
+  let feetVotes = 0, metreVotes = 0;
 
   for (const pm of placemarks) {
     const desc = text(first(pm, 'description'));
@@ -169,6 +174,15 @@ export function parseKml(xml: string, fallbackName = 'Track'): ParsedTrack {
     if (pt != null) {
       const c = parseCoordList(text(first(pt, 'coordinates')))[0];
       if (!c) continue;
+      const lm = ALT_FT_LABEL_RE.exec(desc);
+      if (lm && c.alt != null) {
+        const labelFt = Number(lm[1].replace(/,/g, ''));
+        if (Math.abs(labelFt) >= 1000) {
+          const ratio = c.alt / labelFt;
+          if (Math.abs(ratio - 1) < 0.1) feetVotes++;
+          else if (Math.abs(ratio - FT) < 0.03) metreVotes++;
+        }
+      }
       const when = first(pm, 'when');
       const utcMs = when != null ? parseIsoUtc(text(when)) : null;
       let secOfDay: number | null = null;
@@ -180,12 +194,16 @@ export function parseKml(xml: string, fallbackName = 'Track'): ParsedTrack {
     }
   }
 
-  // Altitude units: KML says metres, but some feeds write feet. Trust an
-  // explicit "feet"/"ft" label, else anything above 16 km (52,000 ft) is too
-  // high for an airliner in metres.
+  // Altitude units: KML says metres, but some feeds write feet. When labels
+  // like "Altitude: 36,000 ft" sit next to coordinates, their ratio decides
+  // (FR24 labels in feet but writes metres; NCAR writes feet in both). Else
+  // trust a bare "feet"/"ft" mention, or anything above 16 km (52,000 ft) —
+  // too high for an airliner in metres.
   const allAlts = [...gxTrack, ...line, ...anchors].map((c) => c.alt ?? 0);
   const maxAlt = allAlts.reduce((a, b) => Math.max(a, b), 0);
-  const feet = sawFeetLabel || maxAlt > 16000;
+  const feet = feetVotes + metreVotes > 0
+    ? feetVotes > metreVotes
+    : sawFeetLabel || maxAlt > 16000;
   if (feet) notes.push('altitudes read as feet');
   const toM = (a: number | null) => (a == null ? null : feet ? a * FT : a);
   const pt = (c: RawCoord, utcMs: number): TrackPoint => ({ utcMs, lat: c.lat, lon: c.lon, altM: toM(c.alt) });

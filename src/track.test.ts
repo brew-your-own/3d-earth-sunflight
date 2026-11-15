@@ -6,10 +6,12 @@ import { vec3ToLatLon } from './geo';
 import kmlText from './fixtures/ncar-gv-rf16.kml?raw';
 import kmzDataUrl from './fixtures/ncar-gv-rf16.kmz?inline';
 import faText from './fixtures/flightaware-dlh796-eddf-vhhh.kml?raw';
+import fr24Text from './fixtures/fr24-af1049-bcn-cdg.kml?raw';
 
 const FIXTURES: Record<string, () => Uint8Array> = {
   'ncar-gv-rf16.kml': () => new TextEncoder().encode(kmlText),
   'flightaware-dlh796-eddf-vhhh.kml': () => new TextEncoder().encode(faText),
+  'fr24-af1049-bcn-cdg.kml': () => new TextEncoder().encode(fr24Text),
   'ncar-gv-rf16.kmz': () => Uint8Array.from(atob(kmzDataUrl.split(',')[1]), (c) => c.charCodeAt(0)),
 };
 const fixture = (name: string) => FIXTURES[name]();
@@ -100,6 +102,22 @@ describe('FlightAware KML (gx:Track)', () => {
   });
 });
 
+// Flightradar24 export: Air France AF1049 Barcelona → Paris CDG, 2026-11-14,
+// thinned to every 20th fix. Every description says "Altitude: 36,000 ft" but
+// the coordinates are metres (10972.8) — the label must not trigger feet.
+describe('Flightradar24 KML (feet labels, metre coordinates)', () => {
+  it('keeps the altitudes in metres: cruise at FL360, not 3.3 km', async () => {
+    const t = await readTrackFile('AF1049-429325d3.kml', fixture('fr24-af1049-bcn-cdg.kml'));
+    expect(t.name).toBe('AF1049/AFR83KK');
+    expect(t.notes).not.toContain('altitudes read as feet');
+    expect(Math.max(...t.points.map((p) => p.altM ?? 0))).toBeCloseTo(36000 * 0.3048, 1);   // 10972.8 m
+    expect(iso(t.points[0].utcMs)).toBe('2026-11-14T18:21:37Z');
+    expect(iso(t.points[t.points.length - 1].utcMs)).toBe('2026-11-14T21:13:22Z');
+    expect(t.points[0]).toMatchObject({ lat: expect.closeTo(41.29, 1), lon: expect.closeTo(2.08, 1) });   // BCN
+    expect(t.points[t.points.length - 1]).toMatchObject({ lat: expect.closeTo(49.01, 1), lon: expect.closeTo(2.58, 1) });   // CDG
+  });
+});
+
 describe('parseKml formats', () => {
   it('reads gx:Track (metres)', () => {
     const kml = `<kml xmlns:gx="http://www.google.com/kml/ext/2.2"><Document><name>AF1</name><Placemark>
@@ -120,6 +138,15 @@ describe('parseKml formats', () => {
     const t = parseKml(kml);
     expect(t.points.map((p) => p.lon)).toEqual([2, 1]);
     expect(t.notes).not.toContain('altitudes read as feet');
+  });
+
+  it('converts when the labelled feet match the coordinate', () => {
+    const pm = (when: string, lat: number, ft: number) =>
+      `<Placemark><description>Alt : ${ft} feet</description><TimeStamp><when>${when}</when></TimeStamp>` +
+      `<Point><coordinates>2,${lat},${ft}</coordinates></Point></Placemark>`;
+    const t = parseKml(`<kml><Document>${pm('2026-06-01T10:00:00Z', 44, 12000)}${pm('2026-06-01T10:20:00Z', 46, 36000)}</Document></kml>`);
+    expect(t.notes).toContain('altitudes read as feet');
+    expect(t.points[1].altM).toBeCloseTo(36000 * 0.3048, 3);
   });
 
   it('explains a NetworkLink-only file', () => {
