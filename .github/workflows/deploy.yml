@@ -1,8 +1,12 @@
 name: Deploy to GitHub Pages
 
+# Publish only released versions: pushing a vX.Y.Z tag deploys that tag.
+# Plain pushes to master don't deploy. "Run workflow" (workflow_dispatch) on
+# master stays available as a manual escape hatch. The github-pages
+# environment allows deployments from `v*` tags and from master.
 on:
   push:
-    branches: [master]
+    tags: ['v*']
   workflow_dispatch:
 
 permissions:

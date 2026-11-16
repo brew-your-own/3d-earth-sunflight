@@ -14,6 +14,9 @@ npm run build    # type-check + chunked production build → dist/ (separate has
 npm run package  # type-check + single-file build → dist/index.html (one ~5 MB self-contained file, double-clickable)
 npm run preview  # serve the dist/ build locally
 npm test         # vitest unit tests for the pure modules (also gates the Pages deploy)
+
+# GitHub Pages deploys only on a pushed `v*` tag (.github/workflows/deploy.yml),
+# not on pushes to master; the github-pages environment allows `v*` tags + master.
 npm run typecheck
 
 # One-off: rebuild src/airports.json from airports/airports.csv.

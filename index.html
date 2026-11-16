@@ -518,7 +518,11 @@
           border-radius: 10px 10px 0 0;
           background: rgba(0, 0, 0, 0.72);
         }
-        #toolbar { max-width: calc(100vw - 24px - min(162px, 20.5vw + 12px)); }
+        #toolbar { max-width: calc(100vw - 24px - min(162px, 20.5vw + 12px)); gap: 1px; }
+        /* One row beside the plane/sun disc, down to a 390 px phone: tighter
+           buttons, no separators, and no "?" (no keyboard to have shortcuts). */
+        .tb-btn { width: 28px; }
+        .tb-sep, .tb-btn[data-key="?"] { display: none; }
         #window-view { bottom: calc(var(--dock-h, 80px) + 8px); }
         #play-btn .label { display: none; }
       }
