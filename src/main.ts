@@ -5,7 +5,8 @@ import { arcPoint, greatCirclePoints, latLonToVec3, vec3ToLatLon } from './geo';
 import { type Flight, type FlightSample, type Side, buildFlight, buildTrackFlight, distanceAt, flightSampleAt, groundSpeedAt } from './flight';
 import { TrackError, cleanTrack, readTrackFile } from './track';
 import { DateTime } from 'luxon';
-import { hideRecap, onAdvicePick, renderRecap, setPlaneDrawing, updateRecapHighlight, updateSunViz } from './recap-panel';
+import { formatNow, hideRecap, onAdvicePick, onTimeRefChange, renderRecap, setPlaneDrawing, updateRecapHighlight, updateSunViz } from './recap-panel';
+import { createPlaneLabel } from './plane-label';
 import { SEAT_LETTERS } from './seat';
 import { type ViewSeat, createWindowView } from './window-view';
 import { TERMINATOR_LAYER, createTerminatorOverlay, legendHtml } from './terminator';
@@ -35,6 +36,10 @@ document.body.appendChild(renderer.domElement);
 // ─── Scene & Camera ──────────────────────────────────────────────────────────
 
 const scene = new THREE.Scene();
+
+// Render-on-demand flag (see "Render on demand" below for how it is used).
+let needsRender = true;
+function invalidate() { needsRender = true; }
 
 const camera = new THREE.PerspectiveCamera(
   45,
@@ -316,6 +321,7 @@ function clearRoute() {
   });
   currentRoute = null;
   clearFlight();
+  refreshCenterBtn();
 }
 
 function setRoute(fromCode: string, toCode: string, viaCodes: string[] = []):
@@ -359,6 +365,7 @@ function setRoute(fromCode: string, toCode: string, viaCodes: string[] = []):
   // to the surface as the Earth rotates.
   earth.add(g);
   currentRoute = g;
+  refreshCenterBtn();
   return { ok: true, from, to, waypoints };
 }
 
@@ -389,6 +396,8 @@ function clearFlight() {
   progress = 0;
   playing = false;
   plane.group.visible = false;
+  planeLabel.hide();
+  document.body.classList.remove('has-flight');
   hideRecap();
 }
 
@@ -411,6 +420,7 @@ function setFlight(
   playing = false;
   renderRecap(flight);
   updateFlightFrame(0);
+  onFlightStarted();
   return { ok: true };
 }
 
@@ -443,6 +453,7 @@ function drawTrackRoute(f: Flight) {
   }
   earth.add(g);
   currentRoute = g;
+  refreshCenterBtn();
 }
 
 function setTrackFlight(f: Flight) {
@@ -454,11 +465,17 @@ function setTrackFlight(f: Flight) {
   playing = false;
   renderRecap(flight);
   updateFlightFrame(0);
+  onFlightStarted();
 }
 
 // ─── Per-frame flight update ─────────────────────────────────────────────────
 
-const flightHud = document.getElementById('flight-hud') as HTMLDivElement;
+// Live readout next to the plane (plane-label.ts): content set here when t
+// changes, position updated every rendered frame in animate().
+const planeLabelEl = document.getElementById('plane-label') as HTMLDivElement;
+const planeLabel = createPlaneLabel(planeLabelEl, () => invalidate());
+const planeWorld = new THREE.Vector3();
+onTimeRefChange(() => { lastFrameT = NaN; invalidate(); });
 
 function fmt(n: number, digits = 1): string { return n.toFixed(digits); }
 
@@ -473,14 +490,14 @@ function formatClock(rightDot: number, forwardDot: number): string {
   return `${h}:${m.toString().padStart(2, '0')}`;
 }
 
-function sideLabel(rightDot: number, forwardDot: number): string {
-  const side = rightDot > 0 ? 'STARBOARD (right)' : 'PORT (left)';
-  let qual: string;
-  if (forwardDot > 0.5) qual = 'ahead';
-  else if (forwardDot < -0.5) qual = 'behind';
-  else qual = 'abeam';
-  return `Sun: ${side}, ${qual}`;
+function sunQualifier(forwardDot: number): string {
+  if (forwardDot > 0.5) return 'ahead';
+  if (forwardDot < -0.5) return 'behind';
+  return 'abeam';
 }
+
+const fmtLat = (v: number) => `${Math.abs(v).toFixed(1)}°${v >= 0 ? 'N' : 'S'}`;
+const fmtLon = (v: number) => `${Math.abs(v).toFixed(1)}°${v >= 0 ? 'E' : 'W'}`;
 
 // Sun direction (Earth-local) for the frame last drawn. The light is re-aimed
 // every frame from this, because the Earth can be rotated by a drag even
@@ -513,18 +530,27 @@ function updateFlightFrame(t: number) {
   updateSunViz(s.sR, s.sF, s.phase !== 'NIGHT');
 
   const { lat: planeLat, lon: planeLon } = vec3ToLatLon(s.pos);
-  const utcStr = new Date(s.utcMs).toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+  const utcStr = new Date(s.utcMs).toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
   const traveledKm  = distanceAt(flight, t);
   const remainingKm = flight.distanceKm - traveledKm;
   const speedKmh = flight.track ? groundSpeedAt(flight, t) : flight.speedKmh;
-  flightHud.textContent = [
-    `${utcStr}   ${(t * 100).toFixed(0)}%   [${s.phase}]`,
-    `Plane: ${fmt(planeLat)}°, ${fmt(planeLon)}°   Alt: ${fmt(s.altKm)} km   Sun elev: ${fmt(s.elevDeg, 0)}°`,
-    `${sideLabel(s.sR, s.sF)}   at ${formatClock(s.sR, s.sF)}`,
-    `${flight.track ? 'Ground speed' : 'Speed'}: ${Math.round(speedKmh)} km/h   ` +
-      `${Math.round(traveledKm)} / ${Math.round(flight.distanceKm)} km   ` +
-      `${Math.round(remainingKm)} km left`,
-  ].join('\n');
+  const side = s.sR > 0 ? 'RIGHT' : 'LEFT';
+  const elev = `${fmt(s.elevDeg, 0)}°`;
+  // Line 1: where the sun is (or that it's night); line 2: when.
+  const sunLine = s.phase === 'NIGHT'
+    ? `<span class="ph-NIGHT">☾ night</span> <span class="dim">· sun ${elev}</span>`
+    : `<span class="ph-${s.phase}">${s.phase === 'DAY' ? '☀' : '◐'}</span> ` +
+      `<span class="side-${side}">${side.toLowerCase()}</span> ${sunQualifier(s.sF)} ` +
+      `<span class="dim">${formatClock(s.sR, s.sF)} · ${elev}</span>` +
+      (s.phase === 'TWILIGHT' ? ' <span class="ph-TWILIGHT">twilight</span>' : '');
+  planeLabel.setContent(
+    `${sunLine}\n${formatNow(flight, s.utcMs)} <span class="dim">· ${(t * 100).toFixed(0)}%</span>`,
+    `${fmtLat(planeLat)} ${fmtLon(planeLon)} · ${fmt(s.altKm)} km\n` +
+      `${Math.round(speedKmh)} km/h${flight.track ? ' ground' : ''} · ` +
+      `${Math.round(remainingKm).toLocaleString()} km left\n` +
+      `${Math.round(traveledKm).toLocaleString()} / ${Math.round(flight.distanceKm).toLocaleString()} km\n` +
+      `${utcStr}`,
+  );
 }
 
 // ─── Route form wiring ───────────────────────────────────────────────────────
@@ -548,6 +574,14 @@ const statusEl = document.getElementById('route-status') as HTMLDivElement;
 function showStatus(msg: string, error = false) {
   statusEl.textContent = msg;
   statusEl.classList.toggle('error', error);
+  if (error) setPanelOpen(form, true);   // the message lives in the form
+}
+
+// The bar's toggle doubles as a summary of the route on screen ("JFK → HND").
+const routeSummaryEl = form.querySelector('.route-summary') as HTMLSpanElement;
+function setRouteSummary(codes: string[], tooltip: string) {
+  routeSummaryEl.textContent = codes.length ? codes.join(' → ') : 'Route';
+  (routeSummaryEl.parentElement as HTMLElement).title = tooltip ? `${tooltip}\nClick to edit the route` : 'Edit the route';
 }
 
 function commitAirportInput(inputEl: HTMLInputElement): string {
@@ -647,6 +681,7 @@ function submitRoute() {
   if (r.ok) {
     const viaStr = via.length > 0 ? ` via ${via.join(' → ')}` : '';
     showStatus(`${from} ${r.from.city} → ${to} ${r.to.city}${viaStr}`);
+    setRouteSummary([from, ...via, to], `${r.from.city} → ${r.to.city}${viaStr}`);
     syncRouteTimezones(r.from, r.to);
     updateUrl(from, to, via);
   } else {
@@ -737,7 +772,7 @@ function setupAirportAutocomplete(input: HTMLInputElement, onPicked?: () => void
 // ─── Playback wiring ─────────────────────────────────────────────────────────
 
 function updatePlayBtn() {
-  playBtn.textContent = playing ? '⏸ Pause' : '▶ Play';
+  playBtn.innerHTML = playing ? '⏸ <span class="label">Pause</span>' : '▶ <span class="label">Play</span>';
 }
 
 // Signature of the inputs used to build the currently-loaded flight. Lets Play
@@ -781,6 +816,8 @@ playBtn.addEventListener('click', () => {
   updateUrl(fromCode, toCode, via);
   const viaStr = via.length > 0 ? ` via ${via.join(' → ')}` : '';
   showStatus(`${fromCode} ${flight!.from.city} → ${toCode} ${flight!.to.city}${viaStr}`);
+  setRouteSummary([fromCode, ...via, toCode],
+    `${flight!.from.city} → ${flight!.to.city}${viaStr}\n${inDep.value.replace('T', ' ')} → ${inArr.value.replace('T', ' ')} (local times)`);
   if (progress >= 1) progress = 0;
   scrubEl.value = String(Math.round(progress * 1000));
   playing = true;
@@ -819,6 +856,7 @@ async function loadTrackFile(file: File) {
     scrubEl.value = '0';
     updatePlayBtn();
 
+    setRouteSummary([f.fromCode, f.toCode], `GPS track “${parsed.name}”: ${f.from.city} → ${f.to.city}`);
     const h = Math.floor(f.durationMs / 3_600_000), m = Math.round(f.durationMs / 60_000) % 60;
     const notes = [...parsed.notes, ...clean.notes];
     showStatus(
@@ -951,16 +989,19 @@ function applyRoute(spec: RouteSpec) {
   submitRoute();
 }
 
+// A compact <select> (native picker on a phone); picking applies the route
+// and snaps back to the "Example routes…" placeholder.
 function renderPresets() {
-  const list = document.getElementById('presets-list') as HTMLUListElement;
-  list.innerHTML = '';
-  for (const p of PRESETS) {
-    const li = document.createElement('li');
+  const sel = document.getElementById('preset-select') as HTMLSelectElement;
+  PRESETS.forEach((p, i) => {
     const v = p.via && p.via.length ? ` via ${p.via.join(', ')}` : '';
-    li.textContent = `${p.from} → ${p.to}${v}`;
-    li.addEventListener('click', () => applyRoute(p));
-    list.appendChild(li);
-  }
+    sel.add(new Option(`${p.from} → ${p.to}${v}`, String(i)));
+  });
+  sel.addEventListener('change', () => {
+    const p = PRESETS[Number(sel.value)];
+    sel.value = '';
+    if (p) applyRoute(p);
+  });
 }
 
 setupAirportAutocomplete(inFrom, () => inTo.focus());
@@ -993,25 +1034,57 @@ let windowFull = false;                   // [F]: that view fills the screen
 let liveLoading = false;  // a GIBS request is in flight; ignore repeat presses
 let liveDateLabel = '';  // YYYY-MM-DD currently displayed when live is on
 
-const hud = document.getElementById('info-text')!;
+// ─── Toolbar (top-left) ─────────────────────────────────────────────────────
+// Icon buttons carry data-key="<hotkey>" and run the same hudActions entry as
+// the key. refreshToolbar() mirrors the toggle states (.on, badge, tooltip).
+const toolbarEl = document.getElementById('toolbar') as HTMLDivElement;
+const morePop   = document.getElementById('more-pop') as HTMLDivElement;
+const shortcutsPop = document.getElementById('shortcuts') as HTMLDivElement;
+const tbBtn = (key: string) => toolbarEl.querySelector<HTMLButtonElement>(`[data-key="${key}"]`)!;
 
-function refreshHud() {
-  hud.innerHTML =
-    `<a class="github-link" href="https://github.com/brew-your-own/3d-earth-sunflight" target="_blank" rel="noopener" aria-label="GitHub repository">` +
-    `<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true">` +
-    `<path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>` +
-    `</svg></a>` +
-    `Rev: <a href="https://github.com/brew-your-own/3d-earth-sunflight/commit/${__GIT_REV__}" target="_blank" rel="noopener">${__GIT_DESCRIBE__}</a><br>` +
-    `<span class="hud-cmd" data-key="c">[C] clouds: <b>${cloudsOn ? 'on' : 'off'}</b></span><br>` +
-    `<span class="hud-cmd" data-key="n">[N] night lights: <b>${nightOn ? 'on' : 'off'}</b></span><br>` +
-    `<span class="hud-cmd" data-key="l">[L] live satellite: <b>${liveLoading ? 'loading…' : liveOn ? `on (${liveDateLabel})` : 'off'}</b></span><br>` +
-    `<span class="hud-cmd" data-key="m">[M] control mode: <b>${controlMode}</b></span><br>` +
-    `<span class="hud-cmd" data-key="w">[W] window view: <b>${windowSide ? windowSide.toLowerCase() : 'off'}</b></span><br>` +
-    `<span class="hud-cmd" data-key="f">[F] full-screen view: <b>${windowFull ? 'on' : 'off'}</b></span><br>` +
-    `<span class="hud-cmd" data-key="t">[T] twilight bands: <b>${twilightOn ? 'on' : 'off'}</b></span><br>` +
-    `<span class="hud-cmd" data-key=" ">[Space] play/pause</span><br>` +
-    `<span class="hud-cmd" data-key="g">[G] center on your location (Barcelona fallback)</span>`;
+function setToggle(key: string, on: boolean, title: string) {
+  const b = tbBtn(key);
+  b.classList.toggle('on', on);
+  b.title = title;
+  b.setAttribute('aria-pressed', String(on));
 }
+
+function refreshToolbar() {
+  const onOff = (v: boolean) => (v ? 'on' : 'off');
+  setToggle('c', cloudsOn, `Clouds: ${onOff(cloudsOn)} [C]`);
+  setToggle('n', nightOn, `Night lights: ${onOff(nightOn)} [N]`);
+  setToggle('t', twilightOn, `Twilight bands: ${onOff(twilightOn)} [T]`);
+  setToggle('l', liveOn, `Live satellite imagery: ${liveLoading ? 'loading…' : liveOn ? `on (${liveDateLabel})` : 'off'} [L]`);
+  tbBtn('l').classList.toggle('loading', liveLoading);
+  const seat = windowSide === null ? 'off' : windowSide === 'COCKPIT' ? 'cockpit' : `${windowSide.toLowerCase()} window`;
+  setToggle('w', windowSide !== null, `Window view: ${seat} — cycles left → right → cockpit → off [W]`);
+  tbBtn('w').querySelector('.badge')!.textContent = windowSide === null ? '' : windowSide[0];
+  setToggle('f', windowFull, `Full-screen view: ${onOff(windowFull)} [F]`);
+  setToggle('m', controlMode === 'globe',
+    `Drag mode: ${controlMode === 'orbit' ? 'orbit the camera' : 'spin the globe'} [M]`);
+}
+
+// The "⋯" popover and the "?" shortcut list: one open at a time, closed by
+// Esc or a click anywhere outside them.
+function openPopover(pop: HTMLElement | null) {
+  for (const p of [morePop, shortcutsPop]) p.classList.toggle('open', p === pop);
+  document.getElementById('more-btn')!.classList.toggle('on', pop === morePop);
+}
+document.getElementById('more-btn')!.addEventListener('click', (e) => {
+  e.stopPropagation();
+  openPopover(morePop.classList.contains('open') ? null : morePop);
+});
+window.addEventListener('click', (e) => {
+  const t = e.target as HTMLElement;
+  if (!t.closest('.popover') && !t.closest('#more-btn') && !t.closest('[data-key="?"]')) openPopover(null);
+});
+
+document.getElementById('about')!.innerHTML =
+  `<a class="github-link" href="https://github.com/brew-your-own/3d-earth-sunflight" target="_blank" rel="noopener" aria-label="GitHub repository">` +
+  `<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true">` +
+  `<path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>` +
+  `</svg>GitHub</a> · ` +
+  `rev <a href="https://github.com/brew-your-own/3d-earth-sunflight/commit/${__GIT_REV__}" target="_blank" rel="noopener">${__GIT_DESCRIBE__}</a>`;
 
 // Reset orbit so the camera faces Earth's (lat, lon) with the north pole
 // straight up. Honors current Earth rotation (idle spin + axial tilt) by
@@ -1032,6 +1105,39 @@ function centerOn(lat: number, lon: number) {
 // know the user's location (no Geolocation API, denied, or timed out).
 const BCN_FALLBACK = { lat: 41.2974, lon: 2.0833 };
 
+// [G] / the toolbar's centre button: with a flight loaded, centre on the
+// plane; with only a route drawn, on the route's midpoint (great-circle
+// midpoint of its endpoints); with neither, on the user's location.
+function centerOnRouteOrUser() {
+  if (flight && currentSample) {
+    const { lat, lon } = vec3ToLatLon(currentSample.pos);
+    centerOn(lat, lon);
+  } else if (currentRoute && lastRouteFrom && lastRouteTo) {
+    const a = latLonToVec3(lastRouteFrom.lat, lastRouteFrom.lon, 1);
+    const b = latLonToVec3(lastRouteTo.lat, lastRouteTo.lon, 1);
+    const mid = a.clone().add(b);
+    const { lat, lon } = vec3ToLatLon(mid.lengthSq() > 1e-6 ? mid : a);   // antipodal: fall back to the origin
+    centerOn(lat, lon);
+  } else {
+    goToUserLocation();
+  }
+}
+
+// Swap the centre button's icon and tooltip with the state above. Looks the
+// button up each time (no module consts): it runs from setRoute/clearRoute,
+// which start-up calls before the toolbar section has run.
+function refreshCenterBtn() {
+  const btn = document.getElementById('center-btn');
+  if (!btn) return;
+  const route = currentRoute !== null;
+  btn.classList.toggle('route', route);
+  const label = route ? 'Center on route' : 'Center on your location';
+  btn.setAttribute('aria-label', label);
+  btn.title = route
+    ? `${label}${flight ? ' (on the plane)' : ''} [G]`
+    : `${label} (Barcelona fallback) [G]`;
+}
+
 function goToUserLocation() {
   if (!navigator.geolocation) {
     centerOn(BCN_FALLBACK.lat, BCN_FALLBACK.lon);
@@ -1043,7 +1149,7 @@ function goToUserLocation() {
     { timeout: 4000, maximumAge: 5 * 60 * 1000 },
   );
 }
-refreshHud();
+refreshToolbar();
 
 // Day/night contrast slider drives three things at once so the effect at the
 // extremes is actually dramatic:
@@ -1100,7 +1206,7 @@ function setLive(on: boolean) {
     // late-arriving swaths, so the global mosaic is essentially complete.
     const date = isoUtcDate(2);
     liveLoading = true;
-    refreshHud();
+    refreshToolbar();
     loader.load(
       gibsTrueColorUrl(date),
       (tex) => {
@@ -1116,14 +1222,14 @@ function setLive(on: boolean) {
         clouds.visible = false;
         liveOn = true;
         liveDateLabel = date;
-        refreshHud();
+        refreshToolbar();
       },
       undefined,
       () => {
         liveLoading = false;
         liveOn = false;
         showStatus('Failed to load live satellite imagery (network/CORS).', true);
-        refreshHud();
+        refreshToolbar();
       }
     );
   } else {
@@ -1133,29 +1239,32 @@ function setLive(on: boolean) {
     clouds.visible = cloudsOn;
     liveOn = false;
     liveDateLabel = '';
-    refreshHud();
+    refreshToolbar();
   }
 }
 
 // Single dispatch table for hotkey actions, so the keyboard handler and the
 // clickable HUD lines invoke the same code paths.
 const hudActions: Record<string, () => void> = {
-  c: () => { cloudsOn = !cloudsOn; clouds.visible = cloudsOn; refreshHud(); },
-  n: () => { nightOn = !nightOn; earthMat.emissiveIntensity = nightOn ? NIGHT_INTENSITY : 0; refreshHud(); },
+  c: () => { cloudsOn = !cloudsOn; clouds.visible = cloudsOn; refreshToolbar(); },
+  n: () => { nightOn = !nightOn; earthMat.emissiveIntensity = nightOn ? NIGHT_INTENSITY : 0; refreshToolbar(); },
   l: () => { setLive(!liveOn); },
-  g: () => { goToUserLocation(); },
-  m: () => { controlMode = (controlMode === 'orbit') ? 'globe' : 'orbit'; applyControlMode(); refreshHud(); },
+  g: () => { centerOnRouteOrUser(); },
+  m: () => { controlMode = (controlMode === 'orbit') ? 'globe' : 'orbit'; applyControlMode(); refreshToolbar(); },
   // off → left window → right window → cockpit → off
   w: () => { setWindowSide(windowSide === null ? 'LEFT' : windowSide === 'LEFT' ? 'RIGHT' : windowSide === 'RIGHT' ? 'COCKPIT' : null); },
   t: () => {
     twilightOn = !twilightOn;
     terminator.visible = twilightOn;
-    twilightLegend?.classList.toggle('hidden', !twilightOn);
-    refreshHud();
+    refreshToolbar();
   },
   // Full screen: expands whichever view is on (turns the cockpit on if none).
   f: () => { setWindowFull(!windowFull); },
-  escape: () => { if (windowFull) setWindowFull(false); },
+  escape: () => {
+    if (morePop.classList.contains('open') || shortcutsPop.classList.contains('open')) openPopover(null);
+    else if (windowFull) setWindowFull(false);
+  },
+  '?': () => { openPopover(shortcutsPop.classList.contains('open') ? null : shortcutsPop); },
   ' ': () => { playBtn.click(); },
 };
 
@@ -1173,9 +1282,8 @@ window.addEventListener('keydown', (e) => {
   action();
 });
 
-// Click delegation: any element inside #info-text carrying data-key="<letter>"
-// triggers the matching hudActions entry, mirroring the keyboard shortcut.
-hud.addEventListener('click', (e) => {
+// Toolbar clicks run the same action as the button's hotkey.
+toolbarEl.addEventListener('click', (e) => {
   const el = (e.target as HTMLElement).closest<HTMLElement>('[data-key]');
   if (!el) return;
   const action = hudActions[el.dataset.key!];
@@ -1197,14 +1305,14 @@ function setWindowSide(side: ViewSeat | null) {
   else if (side) windowLabel.textContent = `${side.toLowerCase()} window (${SEAT_LETTERS[side]}) · [W]`;
   if (side) windowLabel.textContent += windowFull ? ' · [F]/Esc exit full screen' : ' · [F] full screen';
   invalidate();
-  refreshHud();
+  refreshToolbar();
 }
 
 function setWindowFull(on: boolean) {
   windowFull = on;
   windowEl.classList.toggle('full', on);
   if (on && windowSide === null) windowSide = 'COCKPIT';
-  if (!on && windowSide === null) { refreshHud(); return; }
+  if (!on && windowSide === null) { refreshToolbar(); return; }
   setWindowSide(windowSide);   // refresh label, classes, HUD, redraw
 }
 
@@ -1237,25 +1345,62 @@ onAdvicePick((t, side) => {
 });
 
 // ─── Collapsible panels ──────────────────────────────────────────────────────
-// Each panel (settings / route / recap) collapses to a compact header via a
-// `.collapsed` class. On a narrow screen they start collapsed, and opening one
-// closes the others so they never overlap on a phone.
-const PANEL_NARROW_PX = 760;
-const panelEls = Array.from(document.querySelectorAll<HTMLElement>('.panel'));
+// Two panels — route (bottom-left; on a phone the dock + sheet at the bottom)
+// and recap (top-right; on a phone a sheet above the dock) — collapse via a
+// `.collapsed` class. What is open follows the app's state, not the screen:
+//   - no flight yet: the route form is open (on a compact screen: nothing);
+//   - a flight starts: the form folds into its "JFK → HND ✎" summary and the
+//     recap opens on its seat advice (on a compact screen it stays shut —
+//     the dock's "☀ Advice" tab opens it).
+// On a compact screen (narrow, or too short for two panels) opening one
+// panel closes the other, so they never overlap.
+// Functions only (no module-level state): showStatus() may call setPanelOpen
+// during start-up, before this section has run.
+const isCompact = () => window.matchMedia('(max-width: 759px), (max-height: 519px)').matches;
+const recapPanel = () => document.getElementById('recap') as HTMLDivElement;
+
+function setPanelOpen(panel: HTMLElement, open: boolean) {
+  panel.classList.toggle('collapsed', !open);
+  if (open && isCompact()) {
+    for (const p of document.querySelectorAll<HTMLElement>('.panel')) if (p !== panel) p.classList.add('collapsed');
+  }
+  document.getElementById('recap-tab')?.classList.toggle('active', !recapPanel().classList.contains('collapsed'));
+  invalidate();
+}
+
+function onFlightStarted() {
+  document.body.classList.add('has-flight');
+  refreshCenterBtn();
+  setPanelOpen(form, false);
+}
 
 for (const toggle of document.querySelectorAll<HTMLElement>('.panel-toggle')) {
   toggle.addEventListener('click', () => {
     const panel = toggle.closest('.panel') as HTMLElement;
-    const expanding = panel.classList.contains('collapsed');
-    panel.classList.toggle('collapsed');
-    if (expanding && window.innerWidth < PANEL_NARROW_PX) {
-      for (const p of panelEls) if (p !== panel) p.classList.add('collapsed');
-    }
+    setPanelOpen(panel, panel.classList.contains('collapsed'));
   });
 }
+// Phone dock tab for the recap sheet (its own toggle is hidden there).
+document.getElementById('recap-tab')!.addEventListener('click', () => {
+  const r = recapPanel();
+  setPanelOpen(r, r.classList.contains('collapsed'));
+});
 
-if (window.innerWidth < PANEL_NARROW_PX) {
-  for (const p of panelEls) p.classList.add('collapsed');
+if (isCompact()) {
+  for (const p of document.querySelectorAll<HTMLElement>('.panel')) p.classList.add('collapsed');
+}
+
+// The phone layout stacks the recap sheet and the window view above the dock:
+// keep --dock-h equal to the bar's height (it grows when the scrubber wraps).
+{
+  const bar = form.querySelector('.panel-bar') as HTMLElement;
+  const sync = () =>
+    document.documentElement.style.setProperty('--dock-h', `${Math.ceil(bar.getBoundingClientRect().height)}px`);
+  // (No invalidate() here: this first runs before the render loop's state
+  // exists; the observer's callbacks come after a layout change, and any
+  // later change also triggers the user-input invalidation.)
+  new ResizeObserver(sync).observe(bar);
+  sync();
 }
 
 // ─── Resize & pixel density ──────────────────────────────────────────────────
@@ -1287,8 +1432,8 @@ watchPixelRatio();
 // user input on the page invalidates (handlers run before the next frame), and
 // so does every finished texture load (startup maps, live satellite).
 
-let needsRender = true;
-function invalidate() { needsRender = true; }
+// (needsRender / invalidate() are declared at the top of the file: start-up
+// code — route loading, panel state — may call invalidate() before this.)
 
 for (const type of ['pointerdown', 'pointermove', 'pointerup', 'wheel', 'keydown', 'input', 'click', 'touchmove']) {
   window.addEventListener(type, invalidate, { capture: true, passive: true });
@@ -1339,6 +1484,25 @@ function animate() {
   // The full-screen view covers the whole canvas: skip the globe render.
   if (!fullViewShown()) renderer.render(scene, camera);
   if (renderWindowView()) needsRender = true;
+  placePlaneLabel();
+}
+
+// Keep the live readout next to the plane, clear of whatever panel is open.
+const LABEL_OBSTACLES = [
+  '#toolbar', '#route-form', '#recap > .panel-toggle', '#recap .sun-viz',
+  '#recap:not(.collapsed) .panel-body', '#window-view.visible', '.popover.open',
+];
+function placePlaneLabel() {
+  if (!flight || !currentSample || fullViewShown()) { planeLabel.hide(); return; }
+  const obstacles: DOMRect[] = [];
+  for (const sel of LABEL_OBSTACLES) {
+    const el = document.querySelector(sel);
+    if (!el) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width > 0 && r.height > 0) obstacles.push(r);
+  }
+  plane.group.getWorldPosition(planeWorld);
+  planeLabel.place(camera, planeWorld, EARTH_RADIUS, obstacles);
 }
 
 animate();

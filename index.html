@@ -43,37 +43,97 @@
       .panel-body { display: flex; flex-direction: column; }
       .panel.collapsed .panel-body { display: none; }
 
-      /* ─── Settings panel (top-left) ──────────────────────────────────── */
-      #info {
+      /* ─── Toolbar (top-left) ─────────────────────────────────────────────
+         One row of icon toggles (each mirrors a hotkey, named in its tooltip),
+         a "⋯" popover for set-and-forget things, "?" for the shortcut list. */
+      #toolbar {
+        position: fixed;
         top: 12px;
         left: 12px;
+        z-index: 6;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 2px;
+        padding: 3px;
+        max-width: calc(100vw - 24px);
+        background: rgba(0, 0, 0, 0.55);
+        border-radius: 6px;
+        font: 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      .tb-btn {
+        position: relative;
+        width: 30px;
+        height: 30px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: transparent;
+        border: 0;
+        border-radius: 4px;
+        color: #8a9aa8;
+        font: inherit;
+        font-size: 15px;
+        cursor: pointer;
+      }
+      .tb-btn svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+      .tb-btn:hover { color: #fff; background: rgba(255, 255, 255, 0.08); }
+      .tb-btn.on { color: #fff; background: #2c4a6e; }
+      .tb-btn.loading { animation: tb-pulse 0.9s ease-in-out infinite alternate; }
+      @keyframes tb-pulse { from { opacity: 0.35; } to { opacity: 1; } }
+      .tb-btn .badge {
+        position: absolute;
+        right: 1px;
+        bottom: 1px;
+        font-size: 9px;
+        line-height: 1;
+        color: #cfe;
+      }
+      #center-btn .ic-route { display: none; }
+      #center-btn.route .ic-route { display: block; }
+      #center-btn.route .ic-location { display: none; }
+      .tb-sep { width: 1px; margin: 5px 3px; background: rgba(255, 255, 255, 0.15); }
+      .popover {
+        display: none;
+        position: fixed;
+        top: 52px;
+        left: 12px;
+        z-index: 20;
         width: min(330px, calc(100vw - 24px));
-        font: 13px/1.6 monospace;
+        padding: 10px 12px;
+        background: rgba(10, 14, 20, 0.92);
+        border: 1px solid #333;
+        border-radius: 6px;
+        color: #aaa;
+        font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
       }
-      /* Collapsed: shrink the box to the toggle so it isn't a wide empty panel. */
-      #info.collapsed { width: fit-content; }
-      #info .panel-body { padding: 2px 10px 10px; color: #aaa; }
-      #info input[type="range"] {
-        width: 110px;
-        accent-color: #66aaff;
-        vertical-align: middle;
-      }
-      #info label { display: inline-flex; gap: 6px; align-items: center; }
-      #info-text a { color: #aaa; text-decoration: none; }
-      #info-text a:hover { color: #fff; }
-      #info-text a.github-link { vertical-align: -3px; margin-right: 4px; }
-      #info-text .hud-cmd { cursor: pointer; user-select: none; }
-      #info-text .hud-cmd:hover { color: #fff; }
-      #twilight-legend { font-size: 10px; line-height: 1.5; color: #8a9aa8; margin-top: 2px; }
-      #twilight-legend.hidden { display: none; }
+      .popover.open { display: block; }
+      .popover a { color: #aaa; text-decoration: none; }
+      .popover a:hover { color: #fff; }
+      .popover .pop-title { color: #cfe; margin: 6px 0 2px; }
+      .popover .pop-title:first-child { margin-top: 0; }
+      #more-pop input[type="range"] { width: 130px; accent-color: #66aaff; vertical-align: middle; }
+      #more-pop label { display: inline-flex; gap: 6px; align-items: center; }
+      #more-pop .github-link { vertical-align: -3px; margin-right: 4px; }
+      #twilight-legend { font-size: 10px; line-height: 1.5; color: #8a9aa8; }
       #twilight-legend .tl-key { white-space: nowrap; margin-right: 6px; }
       #twilight-legend .tl-dash { display: inline-block; width: 10px; height: 2px; vertical-align: middle; margin-right: 3px; }
+      #shortcuts {
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: min(380px, calc(100vw - 24px));
+      }
+      #shortcuts table { border-collapse: collapse; width: 100%; }
+      #shortcuts td { padding: 2px 0; vertical-align: top; }
+      #shortcuts td.key { color: #fff; white-space: nowrap; padding-right: 12px; }
+      #shortcuts kbd { font: inherit; padding: 0 5px; border: 1px solid #555; border-radius: 3px; background: #1a1a1a; }
 
       /* ─── Route panel (bottom-left) ──────────────────────────────────── */
       #route-form {
         bottom: 12px;
         left: 12px;
         width: min(440px, calc(100vw - 24px));
+        max-height: calc(100vh - 70px);
         font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
         display: flex;
         flex-direction: column;
@@ -81,7 +141,10 @@
       #route-form .panel-body {
         gap: 6px;
         padding: 10px 12px;
+        overflow-y: auto;
+        min-height: 0;
       }
+      #route-form.collapsed { width: min(600px, calc(100vw - 310px)); }
       #route-form .panel-bar {
         display: flex;
         align-items: center;
@@ -201,18 +264,33 @@
         background: rgba(20, 40, 70, 0.35); color: #cfe; font: 16px system-ui, sans-serif;
       }
       #route-status.error { color: #ff6b6b; }
-      #flight-hud { color: #cfe; min-height: 6em; white-space: pre; }
-
-      /* Presets, merged into the route panel. */
-      .presets-section { margin-top: 2px; }
-      .presets-title { color: #cfe; margin-bottom: 4px; font-size: 11px; }
-      #presets-list { list-style: none; padding: 0; margin: 0; }
-      #presets-list li {
+      #route-status:empty { display: none; }
+      #preset-select {
         padding: 3px 6px;
-        cursor: pointer;
-        border-radius: 3px;
+        background: #1a1a1a;
+        color: #ddd;
+        border: 1px solid #555;
+        border-radius: 4px;
+        font: inherit;
+        font-size: 12px;
+        color-scheme: dark;
       }
-      #presets-list li:hover { background: #2c4a6e; color: #fff; }
+      .link-btn {
+        background: none !important;
+        border: 0 !important;
+        padding: 0 !important;
+        color: #9ab !important;
+        text-decoration: underline dotted;
+        font-size: 12px !important;
+      }
+      .link-btn:hover { color: #fff !important; }
+      /* Route summary in the bar ("JFK → HND"); a pencil when the form is shut. */
+      .route-summary { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 16em; }
+      #route-form.collapsed .route-summary::after { content: ' ✎'; color: #9ab; }
+      #route-form .panel-bar .panel-toggle { min-width: 0; }
+      /* Phone-only dock tab that opens the recap sheet (see the narrow media query). */
+      #recap-tab { display: none; }
+      #recap-tab.active { background: #2c4a6e; }
 
       /* ─── Recap panel (top-right) ────────────────────────────────────── */
       #recap {
@@ -227,12 +305,34 @@
       }
       /* Column layout, right-aligned: toggle, plane and table all hug the
          screen edge, clear of the iPhone notch (panel is anchored top-right). */
-      #recap.visible { display: flex; flex-direction: column; align-items: flex-end; }
+      #recap.visible { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+      /* The container is see-through: the toggle, the plane/sun disc and the
+         body each carry their own background, so no empty dark box is left
+         beside the narrow plane diagram. */
+      #recap { background: none; }
+      #recap > .panel-toggle { background: rgba(0, 0, 0, 0.55); border-radius: 6px; padding: 4px 8px; }
       #recap .panel-body {
-        padding: 0 12px 10px;
-        max-height: 60vh;
+        padding: 8px 12px 10px;
+        max-height: calc(100vh - 230px);
         overflow-y: auto;
+        background: rgba(0, 0, 0, 0.55);
+        border-radius: 6px;
       }
+      #recap .details-toggle {
+        align-self: flex-start;
+        margin-top: 6px;
+        padding: 0;
+        background: none;
+        border: 0;
+        color: #9ab;
+        font: inherit;
+        font-size: 11px;
+        cursor: pointer;
+      }
+      #recap .details-toggle:hover { color: #fff; }
+      #recap .details { display: none; margin-top: 8px; }
+      #recap.show-details .details { display: block; }
+      #recap .stats-title { cursor: help; }
       #recap .title { margin-bottom: 6px; color: #cfe; }
       #recap table { border-collapse: collapse; }
       #recap td { padding: 1px 10px 1px 0; vertical-align: top; }
@@ -249,8 +349,11 @@
       #recap table.stats td.sun-pct { text-align: center; color: #ffe28a; padding: 2px 0; }
       #recap .side-LEFT  { color: #4fc3ff; }
       #recap .side-RIGHT { color: #ff8a3d; }
-      #recap table.stats td.footnote { color: #789; font-size: 10px; padding-top: 6px; }
-      #recap .sun-viz { display: flex; justify-content: flex-end; padding: 2px 6px 6px; }
+      #recap .sun-viz {
+        display: flex;
+        padding: 6px;
+        background: radial-gradient(closest-side, rgba(0, 0, 0, 0.55) 80%, rgba(0, 0, 0, 0) 100%);
+      }
       /* 150px on desktop, ~80px on a 390px-wide iPhone, scaling between. */
       #recap .sun-viz svg { display: block; width: min(150px, 20.5vw); height: auto; }
       #recap .sun-viz path.plane {
@@ -264,9 +367,9 @@
       #recap #sun-icon.hidden { opacity: 0; }
 
       /* Seat advice (top of the recap panel). */
-      #recap .advice { margin-bottom: 10px; }
       #recap .advice:empty { display: none; }
       #recap .advice-title { color: #cfe; margin-bottom: 4px; }
+      #recap .advice-ref { color: #789; font-size: 11px; }
       #recap .advice-row { padding: 1px 4px; border-radius: 3px; color: #ddd; }
       #recap .advice-row.pick { cursor: pointer; }
       #recap .advice-row.pick:hover { background: #2c4a6e; color: #fff; }
@@ -338,22 +441,146 @@
       }
       #window-view.full.cockpit .window-glass::after { left: calc(50% - 9px); width: 18px; }
       #window-view.full .window-label { font-size: 13px; bottom: 3vh; }
+      /* ─── Live readout floating next to the plane ────────────────────────
+         Placed every rendered frame by plane-label.ts; the corner nearest the
+         plane is squared off so it reads as pointing at it. */
+      #plane-label {
+        position: fixed;
+        left: 0;
+        top: 0;
+        z-index: 3;
+        display: none;
+        padding: 4px 7px;
+        background: rgba(0, 0, 0, 0.62);
+        border: 1px solid rgba(204, 238, 255, 0.18);
+        border-radius: 6px;
+        color: #cfe;
+        font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+        white-space: pre;
+        cursor: pointer;
+        user-select: none;
+        will-change: transform;
+        transition: opacity 0.2s;
+      }
+      #plane-label.visible { display: block; }
+      #plane-label.behind { opacity: 0.5; }
+      #plane-label[data-corner="bl"] { border-bottom-left-radius: 0; }
+      #plane-label[data-corner="br"] { border-bottom-right-radius: 0; }
+      #plane-label[data-corner="tl"] { border-top-left-radius: 0; }
+      #plane-label[data-corner="tr"] { border-top-right-radius: 0; }
+      #plane-label .pl-details { display: none; color: #9ab; }
+      #plane-label.expanded .pl-details { display: block; }
+      #plane-label .side-LEFT  { color: #4fc3ff; }
+      #plane-label .side-RIGHT { color: #ff8a3d; }
+      #plane-label .ph-DAY      { color: #ffe28a; }
+      #plane-label .ph-TWILIGHT { color: #c79bff; }
+      #plane-label .ph-NIGHT    { color: #7faaff; }
+      #plane-label .dim { color: #789; }
+
+      /* ─── Phone: one dock + sheet at the bottom ───────────────────────────
+         Same markup as on a big screen. The route bar becomes a full-width
+         dock (scrubber on its own row), and whichever panel is open — route
+         form or recap — rises above it as a sheet. --dock-h is kept in sync
+         with the bar's height by main.ts. */
       @media (max-width: 759px) {
-        #window-view { bottom: 64px; }   /* clear the route bar on a phone */
+        #route-form, #route-form.collapsed {
+          left: 0;
+          right: 0;
+          bottom: 0;
+          width: auto;
+          max-height: 75vh;
+          border-radius: 10px 10px 0 0;
+          background: rgba(0, 0, 0, 0.72);
+          padding-bottom: env(safe-area-inset-bottom);
+        }
+        #route-form .panel-bar { flex-wrap: wrap; row-gap: 4px; }
+        #route-form .scrub-wrap { order: -1; flex-basis: 100%; }
+        body.has-flight #recap-tab { display: inline-flex; }
+        #recap.visible {
+          top: auto;
+          right: 0;
+          left: 0;
+          bottom: var(--dock-h, 80px);
+          width: auto;
+          max-width: none;
+          align-items: stretch;
+        }
+        /* Dock row: ▶ first, then the route summary and the Advice tab. */
+        #play-btn { order: 0; }
+        #route-form .panel-bar .panel-toggle { order: 1; }
+        #recap-tab { order: 2; }
+        #recap-tab.active { background: #2c4a6e; border-color: #4a6e98; }
+        #recap > .panel-toggle { display: none; }
+        /* The plane/sun disc stays pinned top-right, sheet open or not. */
+        #recap .sun-viz { position: fixed; top: 8px; right: 8px; }
+        #recap .panel-body {
+          max-height: 60vh;
+          border-radius: 10px 10px 0 0;
+          background: rgba(0, 0, 0, 0.72);
+        }
+        #toolbar { max-width: calc(100vw - 24px - min(162px, 20.5vw + 12px)); }
+        #window-view { bottom: calc(var(--dock-h, 80px) + 8px); }
+        #play-btn .label { display: none; }
       }
     </style>
   </head>
   <body>
-    <div id="info" class="panel">
-      <button type="button" class="panel-toggle">
-        <span class="chevron">▸</span>
-        <span>Settings</span>
+    <div id="toolbar" role="toolbar" aria-label="View settings">
+      <button type="button" class="tb-btn" data-key="c" aria-label="Clouds">
+        <svg viewBox="0 0 16 16"><path d="M4.5 12.5h7.2a2.8 2.8 0 0 0 .3-5.6A4 4 0 0 0 4.3 7.6a2.5 2.5 0 0 0 .2 4.9z"/></svg>
       </button>
-      <div class="panel-body">
-        <div id="info-text"></div>
-        <div><label>Day/night contrast <input id="contrast" type="range" min="0" max="100" value="50" /></label></div>
-        <div id="twilight-legend"></div>
-      </div>
+      <button type="button" class="tb-btn" data-key="n" aria-label="Night lights">
+        <svg viewBox="0 0 16 16"><path d="M13 10.2A5.5 5.5 0 0 1 5.8 3a5.5 5.5 0 1 0 7.2 7.2z"/><circle cx="12" cy="3.5" r=".6" fill="currentColor"/><circle cx="14" cy="6.3" r=".6" fill="currentColor"/></svg>
+      </button>
+      <button type="button" class="tb-btn" data-key="t" aria-label="Twilight bands">
+        <svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><path d="M8 2.5a5.5 5.5 0 0 1 0 11z" fill="currentColor"/></svg>
+      </button>
+      <button type="button" class="tb-btn" data-key="l" aria-label="Live satellite imagery">
+        <svg viewBox="0 0 16 16"><path d="M6.2 6.2l3.6 3.6M5 7.4l3.6 3.6 1.4-1.4-3.6-3.6zM2 7.5l2.5-2.5M2.8 2.8l2.4 2.4M11 13.2l2.2-2.2M10.8 10.8l2.4 2.4"/><path d="M10.5 2.5a3 3 0 0 1 3 3M10.5 4.5a1 1 0 0 1 1 1"/></svg>
+      </button>
+      <span class="tb-sep"></span>
+      <button type="button" class="tb-btn" data-key="w" aria-label="Window view">
+        <svg viewBox="0 0 16 16"><rect x="4" y="2" width="8" height="12" rx="4"/><path d="M4.5 9.5c2-1 5-1 7 0"/></svg>
+        <span class="badge"></span>
+      </button>
+      <button type="button" class="tb-btn" data-key="f" aria-label="Full-screen view">
+        <svg viewBox="0 0 16 16"><path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10"/></svg>
+      </button>
+      <span class="tb-sep"></span>
+      <button type="button" class="tb-btn" data-key="m" aria-label="Drag mode">
+        <svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.2"/><ellipse cx="8" cy="8" rx="6.5" ry="3" transform="rotate(-20 8 8)"/></svg>
+      </button>
+      <button type="button" class="tb-btn" id="center-btn" data-key="g" aria-label="Center on your location" title="Center on your location (Barcelona fallback) [G]">
+        <svg class="ic-location" viewBox="0 0 16 16"><circle cx="8" cy="8" r="4"/><circle cx="8" cy="8" r=".8" fill="currentColor"/><path d="M8 1v2.5M8 12.5V15M1 8h2.5M12.5 8H15"/></svg>
+        <svg class="ic-route" viewBox="0 0 16 16"><circle cx="3" cy="12.5" r="1.5"/><circle cx="13" cy="12.5" r="1.5"/><path d="M4 11C5.5 5 10.5 5 12 11" stroke-dasharray="1.6 1.6"/><path d="M8 1.5v2M8 7.5v.01"/></svg>
+      </button>
+      <button type="button" class="tb-btn" id="more-btn" aria-label="More settings" title="More: contrast, twilight legend, version">⋯</button>
+      <button type="button" class="tb-btn" data-key="?" aria-label="Keyboard shortcuts" title="Keyboard shortcuts [?]">?</button>
+    </div>
+    <div id="more-pop" class="popover">
+      <div class="pop-title">Day/night contrast</div>
+      <label><input id="contrast" type="range" min="0" max="100" value="50" /></label>
+      <div class="pop-title">Twilight bands (sun elevation)</div>
+      <div id="twilight-legend"></div>
+      <div class="pop-title">About</div>
+      <div id="about"></div>
+    </div>
+    <div id="shortcuts" class="popover" role="dialog" aria-label="Keyboard shortcuts">
+      <div class="pop-title">Keyboard shortcuts</div>
+      <table>
+        <tr><td class="key"><kbd>Space</kbd></td><td>play / pause</td></tr>
+        <tr><td class="key"><kbd>C</kbd></td><td>clouds</td></tr>
+        <tr><td class="key"><kbd>N</kbd></td><td>night lights</td></tr>
+        <tr><td class="key"><kbd>T</kbd></td><td>twilight bands</td></tr>
+        <tr><td class="key"><kbd>L</kbd></td><td>live satellite imagery (yesterday's, NASA GIBS)</td></tr>
+        <tr><td class="key"><kbd>W</kbd></td><td>window view: off → left → right → cockpit</td></tr>
+        <tr><td class="key"><kbd>F</kbd></td><td>full-screen window / cockpit view (<kbd>Esc</kbd> exits)</td></tr>
+        <tr><td class="key"><kbd>M</kbd></td><td>drag mode: orbit the camera / spin the globe</td></tr>
+        <tr><td class="key"><kbd>G</kbd></td><td>center on the route — on the plane while a flight is loaded (your location when there is no route)</td></tr>
+        <tr><td class="key"><kbd>?</kbd></td><td>this list</td></tr>
+      </table>
+      <div class="pop-title">Tips</div>
+      <div>Click the label next to the plane for position and speed. Drop a KML / KMZ / GPX file on the globe to replay a real flight.</div>
     </div>
     <form id="route-form" class="panel">
       <div class="panel-body">
@@ -387,23 +614,19 @@
           <span id="arr-tz" class="tz-info"></span>
         </div>
         <div class="row">
-          <button type="button" id="load-track">Load GPS track…</button>
+          <select id="preset-select" aria-label="Example routes"><option value="">Example routes…</option></select>
+          <button type="button" id="load-track" class="link-btn" title="KML · KMZ · GPX — or drop the file on the globe">or load a GPS track…</button>
           <input id="track-file" type="file" accept=".kml,.kmz,.gpx" hidden />
-          <span class="tz-info">KML · KMZ · GPX, or drop a file on the globe</span>
         </div>
         <div id="route-status"></div>
-        <div id="flight-hud"></div>
-        <div class="presets-section">
-          <div class="presets-title">Preset routes</div>
-          <ul id="presets-list"></ul>
-        </div>
       </div>
       <div class="panel-bar">
-        <button type="button" class="panel-toggle">
+        <button type="button" class="panel-toggle" title="Edit the route">
           <span class="chevron">▸</span>
-          <span>Route</span>
+          <span class="route-summary">Route</span>
         </button>
-        <button id="play-btn" type="button">▶ Play</button>
+        <button type="button" id="recap-tab" title="Seat advice and flight recap">☀ Advice</button>
+        <button id="play-btn" type="button">▶ <span class="label">Play</span></button>
         <div class="scrub-wrap">
           <input id="scrub" type="range" min="0" max="1000" value="0" />
           <div id="timeline" title="Top: day / twilight / night — bottom: sun on the left (blue) or right (orange)">
@@ -413,7 +636,7 @@
         </div>
       </div>
     </form>
-    <div id="recap" class="panel">
+    <div id="recap" class="panel collapsed">
       <button type="button" class="panel-toggle">
         <span class="chevron">▸</span>
         <span>Flight recap</span>
@@ -465,14 +688,18 @@
         </svg>
       </div>
       <div class="panel-body">
-        <div class="tz-toggle"></div>
         <div class="advice"></div>
-        <div class="title"></div>
-        <table></table>
-        <div class="stats-title"></div>
-        <table class="stats"></table>
+        <button type="button" class="details-toggle"></button>
+        <div class="details">
+          <div class="tz-toggle"></div>
+          <div class="title"></div>
+          <table></table>
+          <div class="stats-title"></div>
+          <table class="stats"></table>
+        </div>
       </div>
     </div>
+    <div id="plane-label" role="status" title="Click for position and speed"><div class="pl-main"></div><div class="pl-details"></div></div>
     <!-- Window-seat view: the 3D view itself is drawn by main.ts into this
          box's screen rect (scissored second camera); this markup is only the
          cabin-wall frame on top of it. -->

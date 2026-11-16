@@ -1,6 +1,7 @@
-// Recap panel (top-right): transition table, time breakdown, plane/sun
-// diagram, plus the phase timeline strip under the scrubber. DOM only — the
-// numbers come from flight.ts.
+// Recap panel (top-right, a bottom sheet on a phone): seat advice up front,
+// with the transition table and time breakdown behind "Details"; the plane/sun
+// diagram; the phase timeline strip under the scrubber. DOM only — the numbers
+// come from flight.ts.
 import { CLIMB_MIN, CRUISE_ALT_KM, DESCENT_MIN, SUNRISE_ELEV_DEG } from './astro';
 import { type Flight, type RecapRow, type Side, computeRecap } from './flight';
 import { SEAT_LETTERS, type SeatAdvice, type ViewAngle, seatAdvice, viewAngle } from './seat';
@@ -20,6 +21,26 @@ const timelineSide    = timelineEl.querySelector('.tl-side')      as HTMLDivElem
 
 const adviceEl        = recapEl.querySelector('.advice')          as HTMLDivElement;
 const tzToggle        = recapEl.querySelector('.tz-toggle')       as HTMLDivElement;
+const detailsBtn      = recapEl.querySelector('.details-toggle')  as HTMLButtonElement;
+
+// ─── Details (transition table + time breakdown) ─────────────────────────────
+// Hidden by default so the panel opens on the seat advice alone; the choice
+// is remembered per browser.
+const DETAILS_KEY = 'recap-details';
+let showDetails = false;
+try { showDetails = localStorage.getItem(DETAILS_KEY) === '1'; } catch { /* ignore */ }
+
+function applyDetails() {
+  recapEl.classList.toggle('show-details', showDetails);
+  detailsBtn.textContent = showDetails ? 'Hide details ▴' : 'Details: transitions, time breakdown, clock ▾';
+}
+applyDetails();
+detailsBtn.addEventListener('click', () => {
+  showDetails = !showDetails;
+  try { localStorage.setItem(DETAILS_KEY, showDetails ? '1' : '0'); } catch { /* ignore */ }
+  applyDetails();
+  if (showDetails && !Number.isNaN(lastHighlightMs)) updateRecapHighlight(lastHighlightMs);
+});
 
 // ─── Time reference (dep / arr / UTC / plane-local) ─────────────────────────
 // Remembered per browser; storage can throw (private mode), so guard it.
@@ -31,6 +52,14 @@ try {
 } catch { /* ignore */ }
 let currentFlight: Flight | null = null;
 let lastHighlightMs = NaN;
+let onRefChange: () => void = () => {};
+// main.ts redraws the plane label (which shows the time in this clock).
+export function onTimeRefChange(cb: () => void) { onRefChange = cb; }
+
+// "Tue 02:49 HND": the moment in the recap's chosen clock.
+export function formatNow(f: Flight, utcMs: number): string {
+  return `${formatAt(f, timeRef, utcMs, 'ccc HH:mm')} ${refLabel(f, timeRef)}`;
+}
 
 tzToggle.addEventListener('click', (e) => {
   const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-ref]');
@@ -39,6 +68,7 @@ tzToggle.addEventListener('click', (e) => {
   try { localStorage.setItem(TZ_KEY, timeRef); } catch { /* ignore */ }
   renderRecap(currentFlight);
   if (!Number.isNaN(lastHighlightMs)) updateRecapHighlight(lastHighlightMs, false);
+  onRefChange();
 });
 
 function renderTzToggle(f: Flight) {
@@ -108,7 +138,8 @@ function renderAdvice(f: Flight, a: SeatAdvice) {
   lines.push(...moonAdviceLines(f, {
     sideHtml, viewText: (az) => VIEW_TEXT[viewAngle(az)], time: (ms) => at(f, ms, 'ccc HH:mm'),
   }));
-  adviceEl.innerHTML = `<div class="advice-title">Seat advice</div>${lines.join('')}`;
+  adviceEl.innerHTML =
+    `<div class="advice-title">Seat advice <span class="advice-ref">· ${refLabel(f, timeRef)} times</span></div>${lines.join('')}`;
 }
 
 // ─── Aurora advice lines ─────────────────────────────────────────────────────
@@ -135,15 +166,15 @@ export function renderRecap(f: Flight) {
     const cls = `phase-${r.phase}${r.kind === 'endpoint' ? ' endpoint' : ''}`;
     return `<tr class="${cls}"><td class="time">${t}</td><td class="label">${r.label}</td></tr>`;
   }).join('');
-  recapStatsTitle.textContent = 'Time breakdown';
+  recapStatsTitle.textContent = 'Time breakdown ⓘ';
+  recapStatsTitle.title = `Sunrise/sunset at ${CRUISE_ALT_KM} km cruise: sun elev ${SUNRISE_ELEV_DEG.toFixed(1)}°` +
+    ` (−0.8° on the ground; ${CLIMB_MIN}-min climb, ${DESCENT_MIN}-min descent)`;
   const pct = (v: number) => `${v.toFixed(0)}%`;
   recapStatsTable.innerHTML = [
     `<tr class="phase-DAY"><td colspan="2" class="sun-pct">` +
       `<span class="side-LEFT">${pct(stats.leftPct)} ←</span> Sun <span class="side-RIGHT">→ ${pct(stats.rightPct)}</span></td></tr>`,
     `<tr class="phase-TWILIGHT"><td class="label">Twilight</td><td class="pct">${pct(stats.twilightPct)}</td></tr>`,
     `<tr class="phase-NIGHT"><td class="label">Night</td><td class="pct">${pct(stats.nightPct)}</td></tr>`,
-    `<tr><td colspan="2" class="footnote">Sunrise/sunset at ${CRUISE_ALT_KM} km cruise: sun elev ${SUNRISE_ELEV_DEG.toFixed(1)}°` +
-      ` (−0.8° on the ground; ${CLIMB_MIN}-min climb, ${DESCENT_MIN}-min descent)</td></tr>`,
   ].join('');
   renderTimeline(f, rows);
   recapEl.classList.add('visible');
@@ -164,7 +195,7 @@ export function updateRecapHighlight(utcMs: number, scroll = true) {
   if (currentRowIdx >= 0) rowEls[currentRowIdx].classList.remove('current');
   if (idx >= 0) {
     rowEls[idx].classList.add('current');
-    if (scroll) rowEls[idx].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    if (scroll && showDetails) rowEls[idx].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }
   currentRowIdx = idx;
 }
